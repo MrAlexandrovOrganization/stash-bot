@@ -1,0 +1,17 @@
+services:
+  stash-bot:
+    build: .
+    restart: unless-stopped
+    environment:
+      BOT_TOKEN: "${BOT_TOKEN}"
+      ROOT_ID: "${ROOT_ID}"
+      STASH_URL: "${STASH_URL:-http://stash:8080}"
+    networks:
+      - stash-bot-net
+      - stash-api-net
+
+networks:
+  stash-bot-net:
+  stash-api-net:
+    external: true
+    name: stash-api-net
