@@ -30,11 +30,11 @@ func (b *Bot) handleTextInput(msg *tgbotapi.Message) {
 		updated, err := b.stash.Update(ctx, sess.CurrentItem.ID, stash.UpdateMeta{Description: &text})
 		if err != nil {
 			slog.Error("update desc", "error", err)
-			b.send(msg.Chat.ID, "Ошибка при обновлении описания.")
+			send(b, msg.Chat.ID, "Ошибка при обновлении описания.")
 			return
 		}
 		applyItemUpdate(sess, updated)
-		b.showItem(msg.Chat.ID, sess)
+		showItem(b, msg.Chat.ID, sess)
 
 	case "tags":
 		sess.Pending = ""
@@ -45,11 +45,11 @@ func (b *Bot) handleTextInput(msg *tgbotapi.Message) {
 		updated, err := b.stash.Update(ctx, sess.CurrentItem.ID, stash.UpdateMeta{Tags: tags})
 		if err != nil {
 			slog.Error("update tags", "error", err)
-			b.send(msg.Chat.ID, "Ошибка при обновлении тегов.")
+			send(b, msg.Chat.ID, "Ошибка при обновлении тегов.")
 			return
 		}
 		applyItemUpdate(sess, updated)
-		b.showItem(msg.Chat.ID, sess)
+		showItem(b, msg.Chat.ID, sess)
 
 	case "tr":
 		sess.Pending = ""
@@ -59,11 +59,11 @@ func (b *Bot) handleTextInput(msg *tgbotapi.Message) {
 		updated, err := b.stash.Update(ctx, sess.CurrentItem.ID, stash.UpdateMeta{Transcript: &text})
 		if err != nil {
 			slog.Error("update transcript", "error", err)
-			b.send(msg.Chat.ID, "Ошибка при обновлении расшифровки.")
+			send(b, msg.Chat.ID, "Ошибка при обновлении расшифровки.")
 			return
 		}
 		applyItemUpdate(sess, updated)
-		b.showItem(msg.Chat.ID, sess)
+		showItem(b, msg.Chat.ID, sess)
 
 	default:
 		// No pending state: treat message as a search query.
@@ -87,7 +87,7 @@ func applyItemUpdate(sess *Session, updated *stash.Item) {
 func doSearch(b *Bot, chatID int64, sess *Session, query string) {
 	query = strings.TrimSpace(query)
 	if query == "" {
-		b.send(chatID, "Введи текст для поиска.")
+		send(b, chatID, "Введи текст для поиска.")
 		return
 	}
 
@@ -98,7 +98,7 @@ func doSearch(b *Bot, chatID int64, sess *Session, query string) {
 	items, err := b.stash.Search(ctx, stash.SearchQuery{Text: text, Tags: posTags})
 	if err != nil {
 		slog.Error("search: stash failed", "error", err)
-		b.send(chatID, "Ошибка поиска.")
+		send(b, chatID, "Ошибка поиска.")
 		return
 	}
 	slog.Info("search: got results", "count", len(items))
@@ -121,7 +121,7 @@ func doSearch(b *Bot, chatID int64, sess *Session, query string) {
 				tgbotapi.NewInlineKeyboardButtonData("🏠 Меню", "menu"),
 			),
 		)
-		b.sendHTML(chatID, "Ничего не найдено.", &kb)
+		sendHTML(b, chatID, "Ничего не найдено.", &kb)
 		return
 	}
 
@@ -129,5 +129,5 @@ func doSearch(b *Bot, chatID int64, sess *Session, query string) {
 	sess.Back = ScreenMain
 	sess.Items = items
 	sess.CurrentPage = 0
-	b.sendStoragePage(chatID, sess, true)
+	sendStoragePage(b, chatID, sess, true)
 }

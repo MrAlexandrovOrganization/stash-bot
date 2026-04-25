@@ -18,7 +18,7 @@ import (
 // of the last sent message (used to attach navigation controls to it).
 // Photos and videos go as a media group; GIFs and documents are sent individually.
 // Items with a cached Telegram file_id are sent instantly without touching stash.
-func (b *Bot) sendPageFiles(chatID int64, items []*stash.Item) int {
+func sendPageFiles(b *Bot, chatID int64, items []*stash.Item) int {
 	var mediaItems []*stash.Item
 	var singleItems []*stash.Item
 	for _, it := range items {
@@ -30,10 +30,10 @@ func (b *Bot) sendPageFiles(chatID int64, items []*stash.Item) int {
 	}
 	var lastMsgID int
 	if len(mediaItems) > 0 {
-		lastMsgID = b.sendMediaGroupItems(chatID, mediaItems)
+		lastMsgID = sendMediaGroupItems(b, chatID, mediaItems)
 	}
 	for _, it := range singleItems {
-		if id := b.sendSingleItem(chatID, it); id != 0 {
+		if id := sendSingleItem(b, chatID, it); id != 0 {
 			lastMsgID = id
 		}
 	}
@@ -49,7 +49,7 @@ type mediaSlot struct {
 
 // sendMediaGroupItems sends photos/videos as a Telegram media group and returns the
 // message ID of the last message in the group (for attaching navigation controls).
-func (b *Bot) sendMediaGroupItems(chatID int64, items []*stash.Item) int {
+func sendMediaGroupItems(b *Bot, chatID int64, items []*stash.Item) int {
 	ctx := context.Background()
 	media := make([]interface{}, 0, len(items))
 	slots := make([]mediaSlot, 0, len(items))
@@ -145,7 +145,7 @@ func (b *Bot) sendMediaGroupItems(chatID int64, items []*stash.Item) int {
 			tgID = msg.Video.FileID
 		}
 		if tgID != "" {
-			b.persistTgFileID(slot.item, tgID)
+			persistTgFileID(b, slot.item, tgID)
 		}
 	}
 	slog.Info("sendMediaGroupItems: done")
@@ -154,7 +154,7 @@ func (b *Bot) sendMediaGroupItems(chatID int64, items []*stash.Item) int {
 
 // sendSingleItem sends a GIF or document, using cached Telegram file_id when available.
 // Returns the sent message ID (0 on failure).
-func (b *Bot) sendSingleItem(chatID int64, it *stash.Item) int {
+func sendSingleItem(b *Bot, chatID int64, it *stash.Item) int {
 	caption := buildItemCaption(it)
 
 	if it.TelegramFileID != nil && *it.TelegramFileID != "" {
@@ -212,7 +212,7 @@ func (b *Bot) sendSingleItem(chatID int64, it *stash.Item) int {
 		m.ParseMode = tgbotapi.ModeHTML
 		sentMsg, sendErr = b.api.Send(m)
 		if sendErr == nil && sentMsg.Animation != nil {
-			b.persistTgFileID(it, sentMsg.Animation.FileID)
+			persistTgFileID(b, it, sentMsg.Animation.FileID)
 		}
 	default:
 		m := tgbotapi.NewDocument(chatID, fr)
@@ -220,7 +220,7 @@ func (b *Bot) sendSingleItem(chatID int64, it *stash.Item) int {
 		m.ParseMode = tgbotapi.ModeHTML
 		sentMsg, sendErr = b.api.Send(m)
 		if sendErr == nil && sentMsg.Document != nil {
-			b.persistTgFileID(it, sentMsg.Document.FileID)
+			persistTgFileID(b, it, sentMsg.Document.FileID)
 		}
 	}
 	if sendErr != nil {
@@ -256,13 +256,13 @@ func buildItemCaption(it *stash.Item) string {
 // If item.TelegramFileID is already set (persisted in stash DB), the file is sent
 // directly by Telegram file_id — no download required.
 // On first upload the received file_id is saved back to stash asynchronously.
-func (b *Bot) sendFile(chatID int64, item *stash.Item) {
+func sendFile(b *Bot, chatID int64, item *stash.Item) {
 	caption := sanitizeUTF8(item.Description)
 
 	// Fast path: Telegram file_id already persisted in stash.
 	if item.TelegramFileID != nil && *item.TelegramFileID != "" {
 		slog.Info("sendFile: using persisted tg file_id", "id", item.ID, "tg_id", *item.TelegramFileID)
-		b.sendByTgFileID(chatID, *item.TelegramFileID, item.Type, caption)
+		sendByTgFileID(b, chatID, *item.TelegramFileID, item.Type, caption)
 		return
 	}
 
@@ -273,7 +273,7 @@ func (b *Bot) sendFile(chatID int64, item *stash.Item) {
 	rc, _, err := b.stash.GetFile(ctx, item.ID)
 	if err != nil {
 		slog.Error("sendFile: get file failed", "id", item.ID, "error", err)
-		b.send(chatID, "Не удалось получить файл.")
+		send(b, chatID, "Не удалось получить файл.")
 		return
 	}
 
@@ -282,7 +282,7 @@ func (b *Bot) sendFile(chatID int64, item *stash.Item) {
 	rc.Close()
 	if err != nil {
 		slog.Error("sendFile: read failed", "id", item.ID, "error", err)
-		b.send(chatID, "Ошибка при чтении файла.")
+		send(b, chatID, "Ошибка при чтении файла.")
 		return
 	}
 	slog.Info("sendFile: uploading to Telegram", "id", item.ID, "bytes", len(data))
@@ -297,26 +297,26 @@ func (b *Bot) sendFile(chatID int64, item *stash.Item) {
 		m.Caption = caption
 		sentMsg, sendErr = b.api.Send(m)
 		if sendErr == nil && len(sentMsg.Photo) > 0 {
-			b.persistTgFileID(item, sentMsg.Photo[len(sentMsg.Photo)-1].FileID)
+			persistTgFileID(b, item, sentMsg.Photo[len(sentMsg.Photo)-1].FileID)
 		}
 	case stash.MediaTypeVideo:
 		m := tgbotapi.NewVideo(chatID, fr)
 		m.Caption = caption
 		sentMsg, sendErr = b.api.Send(m)
 		if sendErr == nil && sentMsg.Video != nil {
-			b.persistTgFileID(item, sentMsg.Video.FileID)
+			persistTgFileID(b, item, sentMsg.Video.FileID)
 		}
 	case stash.MediaTypeGIF:
 		sentMsg, sendErr = b.api.Send(tgbotapi.NewAnimation(chatID, fr))
 		if sendErr == nil && sentMsg.Animation != nil {
-			b.persistTgFileID(item, sentMsg.Animation.FileID)
+			persistTgFileID(b, item, sentMsg.Animation.FileID)
 		}
 	default:
 		m := tgbotapi.NewDocument(chatID, fr)
 		m.Caption = caption
 		sentMsg, sendErr = b.api.Send(m)
 		if sendErr == nil && sentMsg.Document != nil {
-			b.persistTgFileID(item, sentMsg.Document.FileID)
+			persistTgFileID(b, item, sentMsg.Document.FileID)
 		}
 	}
 
@@ -329,7 +329,7 @@ func (b *Bot) sendFile(chatID int64, item *stash.Item) {
 
 // persistTgFileID saves the Telegram file_id into the item (for in-session reuse)
 // and asynchronously persists it to stash so it survives bot restarts.
-func (b *Bot) persistTgFileID(item *stash.Item, tgFileID string) {
+func persistTgFileID(b *Bot, item *stash.Item, tgFileID string) {
 	item.TelegramFileID = &tgFileID // update in-memory item (session cache)
 	go func() {
 		ctx := context.Background()
@@ -342,7 +342,7 @@ func (b *Bot) persistTgFileID(item *stash.Item, tgFileID string) {
 }
 
 // sendByTgFileID sends a file by its Telegram file_id (no re-upload).
-func (b *Bot) sendByTgFileID(chatID int64, fileID string, mediaType stash.MediaType, caption string) {
+func sendByTgFileID(b *Bot, chatID int64, fileID string, mediaType stash.MediaType, caption string) {
 	var msg tgbotapi.Chattable
 	switch mediaType {
 	case stash.MediaTypeImage:
@@ -368,7 +368,7 @@ func (b *Bot) sendByTgFileID(chatID int64, fileID string, mediaType stash.MediaT
 // prefetchItems downloads stash bytes for items that don't yet have a Telegram file_id,
 // storing them in b.fileCache so the next sendMediaGroupItems / sendSingleItem call
 // can skip the stash download entirely. Runs in a background goroutine.
-func (b *Bot) prefetchItems(items []*stash.Item) {
+func prefetchItems(b *Bot, items []*stash.Item) {
 	ctx := context.Background()
 	for _, it := range items {
 		if it.TelegramFileID != nil && *it.TelegramFileID != "" {

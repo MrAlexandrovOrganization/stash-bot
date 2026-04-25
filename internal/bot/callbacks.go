@@ -41,21 +41,21 @@ func handleMenu(ctx context.Context, b *Bot, cc CallbackContext) {
 	slog.Info("menu callback", "data", cc.data)
 	cc.session.Pending = ""
 
-	b.showMainMenu(cc.chatID, cc.session)
+	showMainMenu(b, cc.chatID, cc.session)
 }
 
 func handleStorage(ctx context.Context, b *Bot, cc CallbackContext) {
 	slog.Info("storage callback", "data", cc.data)
 	cc.session.Pending = ""
 
-	b.loadStorageAndShow(cc.chatID, cc.session, true)
+	loadStorageAndShow(b, cc.chatID, cc.session, true)
 }
 
 func handleSearch(ctx context.Context, b *Bot, cc CallbackContext) {
 	slog.Info("search callback", "data", cc.data)
 
 	cc.session.Pending = "search"
-	cc.session.LastMsgID = b.editOrSendHTML(cc.chatID, cc.session.LastMsgID, "🔍 Введи поисковый запрос:\n\nФормат: <code>текст #тег -#исключить</code>", cancelKeyboard())
+	cc.session.LastMsgID = editOrSendHTML(b, cc.chatID, cc.session.LastMsgID, "🔍 Введи поисковый запрос:\n\nФормат: <code>текст #тег -#исключить</code>", cancelKeyboard())
 }
 
 func handleStoragePage(ctx context.Context, b *Bot, cc CallbackContext) {
@@ -73,14 +73,14 @@ func handleStoragePage(ctx context.Context, b *Bot, cc CallbackContext) {
 	}
 	slog.Info("navigate page", "page", page, "total_pages", totalPages)
 	cc.session.CurrentPage = page
-	b.sendStoragePage(cc.chatID, cc.session, true)
+	sendStoragePage(b, cc.chatID, cc.session, true)
 }
 
 func handleSelectMode(ctx context.Context, b *Bot, cc CallbackContext) {
 	slog.Info("select mode callback", "data", cc.data, "page", cc.session.CurrentPage)
 
 	cc.session.Screen = ScreenSelect
-	b.showSelectMode(cc.chatID, cc.session)
+	showSelectMode(b, cc.chatID, cc.session)
 }
 
 func handleSelectItem(ctx context.Context, b *Bot, cc CallbackContext) {
@@ -100,8 +100,7 @@ func handleSelectItem(ctx context.Context, b *Bot, cc CallbackContext) {
 	cc.session.Back = cc.session.Screen
 	cc.session.Screen = ScreenItem
 	slog.Info("selected item", "id", cc.session.CurrentItem.ID, "name", cc.session.CurrentItem.FileName)
-	b.showItem(cc.chatID, cc.session)
-
+	showItem(b, cc.chatID, cc.session)
 }
 
 func handleEdit(ctx context.Context, b *Bot, cc CallbackContext) {
@@ -141,7 +140,7 @@ func handleEdit(ctx context.Context, b *Bot, cc CallbackContext) {
 	}
 	slog.Info("start field edit", "field", cc.data)
 	cc.session.Pending = cc.data
-	cc.session.LastMsgID = b.editOrSendHTML(cc.chatID, cc.session.LastMsgID, prompt, cancelKeyboard())
+	cc.session.LastMsgID = editOrSendHTML(b, cc.chatID, cc.session.LastMsgID, prompt, cancelKeyboard())
 }
 
 func handleFile(ctx context.Context, b *Bot, cc CallbackContext) {
@@ -152,7 +151,7 @@ func handleFile(ctx context.Context, b *Bot, cc CallbackContext) {
 		return
 	}
 	slog.Info("send file", "id", cc.session.CurrentItem.ID, "name", cc.session.CurrentItem.FileName)
-	b.sendFile(cc.chatID, cc.session.CurrentItem)
+	sendFile(b, cc.chatID, cc.session.CurrentItem)
 }
 
 func handleDelete(ctx context.Context, b *Bot, cc CallbackContext) {
@@ -166,7 +165,7 @@ func handleDelete(ctx context.Context, b *Bot, cc CallbackContext) {
 	slog.Info("deleting item", "id", cc.session.CurrentItem.ID)
 	if err := b.stash.Delete(ctx, cc.session.CurrentItem.ID); err != nil {
 		slog.Error("delete failed", "id", cc.session.CurrentItem.ID, "error", err)
-		b.send(cc.chatID, "Ошибка при удалении.")
+		send(b, cc.chatID, "Ошибка при удалении.")
 		return
 	}
 	slog.Info("item deleted", "id", cc.session.CurrentItem.ID)
@@ -178,8 +177,8 @@ func handleDelete(ctx context.Context, b *Bot, cc CallbackContext) {
 	}
 	cc.session.CurrentItem = nil
 	cc.session.Screen = cc.session.Back
-	b.send(cc.chatID, "🗑 Удалено.")
-	b.sendStoragePage(cc.chatID, cc.session, true)
+	send(b, cc.chatID, "🗑 Удалено.")
+	sendStoragePage(b, cc.chatID, cc.session, true)
 }
 
 func handleBack(ctx context.Context, b *Bot, cc CallbackContext) {
@@ -190,9 +189,9 @@ func handleBack(ctx context.Context, b *Bot, cc CallbackContext) {
 	switch cc.session.Back {
 	case ScreenStorage:
 		cc.session.Screen = ScreenStorage
-		b.sendStoragePage(cc.chatID, cc.session, false)
+		sendStoragePage(b, cc.chatID, cc.session, false)
 	default:
-		b.showMainMenu(cc.chatID, cc.session)
+		showMainMenu(b, cc.chatID, cc.session)
 	}
 }
 
@@ -201,9 +200,9 @@ func handleCancel(ctx context.Context, b *Bot, cc CallbackContext) {
 	cc.session.Pending = ""
 	slog.Info("cancel pending input")
 	if cc.session.Screen == ScreenItem && cc.session.CurrentItem != nil {
-		b.showItem(cc.chatID, cc.session)
+		showItem(b, cc.chatID, cc.session)
 	} else {
-		b.sendStoragePage(cc.chatID, cc.session, false)
+		sendStoragePage(b, cc.chatID, cc.session, false)
 	}
 }
 

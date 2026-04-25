@@ -18,7 +18,7 @@ func (b *Bot) handleUpload(msg *tgbotapi.Message, mediaType stash.MediaType) {
 
 	fileID, fileName, contentType := extractFileInfo(msg, mediaType)
 	if fileID == "" {
-		b.send(msg.Chat.ID, "Не удалось получить файл.")
+		send(b, msg.Chat.ID, "Не удалось получить файл.")
 		return
 	}
 	slog.Info("upload: downloading from Telegram", "file_name", fileName, "content_type", contentType, "media_type", mediaType)
@@ -28,14 +28,14 @@ func (b *Bot) handleUpload(msg *tgbotapi.Message, mediaType stash.MediaType) {
 	fileURL, err := b.api.GetFileDirectURL(fileID)
 	if err != nil {
 		slog.Error("upload: get file url", "error", err)
-		b.send(msg.Chat.ID, "Не удалось скачать файл из Telegram.")
+		send(b, msg.Chat.ID, "Не удалось скачать файл из Telegram.")
 		return
 	}
 
 	resp, err := http.Get(fileURL) //nolint:noctx
 	if err != nil {
 		slog.Error("upload: http get failed", "error", err)
-		b.send(msg.Chat.ID, "Не удалось скачать файл.")
+		send(b, msg.Chat.ID, "Не удалось скачать файл.")
 		return
 	}
 	defer resp.Body.Close()
@@ -47,7 +47,7 @@ func (b *Bot) handleUpload(msg *tgbotapi.Message, mediaType stash.MediaType) {
 	})
 	if err != nil {
 		slog.Error("upload: stash upload failed", "error", err)
-		b.send(msg.Chat.ID, "Ошибка при сохранении файла.")
+		send(b, msg.Chat.ID, "Ошибка при сохранении файла.")
 		return
 	}
 	slog.Info("upload: done", "id", item.ID, "file_name", item.FileName)
@@ -58,7 +58,7 @@ func (b *Bot) handleUpload(msg *tgbotapi.Message, mediaType stash.MediaType) {
 	sess.Screen = ScreenItem
 	sess.Back = ScreenStorage
 	sess.Items = nil
-	b.showItem(msg.Chat.ID, sess)
+	showItem(b, msg.Chat.ID, sess)
 }
 
 func extractFileInfo(msg *tgbotapi.Message, mediaType stash.MediaType) (fileID, fileName, contentType string) {

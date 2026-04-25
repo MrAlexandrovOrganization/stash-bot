@@ -47,7 +47,7 @@ func (b *Bot) handleUpdate(update tgbotapi.Update) {
 
 	if msg.Command() == "start" {
 		sess.Pending = ""
-		b.showMainMenu(msg.Chat.ID, sess)
+		showMainMenu(b, msg.Chat.ID, sess)
 		return
 	}
 
