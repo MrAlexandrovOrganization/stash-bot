@@ -27,4 +27,8 @@ type Session struct {
 
 	// Pending text input. Values: "desc", "tags", "tr", "search"
 	Pending string
+
+	// LastMsgID is the message ID of the last bot control message (text+keyboard).
+	// Used to edit the message in place instead of sending a new one.
+	LastMsgID int
 }

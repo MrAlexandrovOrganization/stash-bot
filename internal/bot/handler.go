@@ -20,10 +20,11 @@ import (
 const pageSize = 10
 
 type Bot struct {
-	api      *tgbotapi.BotAPI
-	stash    *stash.Client
-	rootID   int64
-	sessions sync.Map // int64 (userID) → *Session
+	api       *tgbotapi.BotAPI
+	stash     *stash.Client
+	rootID    int64
+	sessions  sync.Map // int64 (userID) → *Session
+	fileCache sync.Map // string (item ID) → []byte (prefetched raw bytes)
 }
 
 func New(token string, rootID int64, stashClient *stash.Client) (*Bot, error) {
@@ -95,7 +96,7 @@ func (b *Bot) handleUpdate(update tgbotapi.Update) {
 
 	if msg.Command() == "start" {
 		sess.Pending = ""
-		b.showMainMenu(msg.Chat.ID)
+		b.showMainMenu(msg.Chat.ID, sess)
 		return
 	}
 
@@ -204,7 +205,7 @@ func (b *Bot) handleCallback(cb *tgbotapi.CallbackQuery) {
 
 	case "menu":
 		sess.Pending = ""
-		b.showMainMenu(chatID)
+		b.showMainMenu(chatID, sess)
 
 	case "storage":
 		sess.Pending = ""
@@ -212,7 +213,7 @@ func (b *Bot) handleCallback(cb *tgbotapi.CallbackQuery) {
 
 	case "search":
 		sess.Pending = "search"
-		b.sendHTML(chatID, "🔍 Введи поисковый запрос:\n\nФормат: <code>текст #тег -#исключить</code>", cancelKeyboard())
+		sess.LastMsgID = b.editOrSendHTML(chatID, sess.LastMsgID, "🔍 Введи поисковый запрос:\n\nФормат: <code>текст #тег -#исключить</code>", cancelKeyboard())
 
 	case "sp": // storage page
 		page, err := strconv.Atoi(payload)
@@ -227,7 +228,7 @@ func (b *Bot) handleCallback(cb *tgbotapi.CallbackQuery) {
 		}
 		slog.Info("navigate page", "page", page, "total_pages", totalPages)
 		sess.CurrentPage = page
-		b.sendStoragePage(chatID, sess)
+		b.sendStoragePage(chatID, sess, true)
 
 	case "ssel": // enter select mode
 		slog.Info("enter select mode", "page", sess.CurrentPage)
@@ -286,7 +287,7 @@ func (b *Bot) handleCallback(cb *tgbotapi.CallbackQuery) {
 		}
 		slog.Info("start field edit", "field", payload)
 		sess.Pending = payload
-		b.sendHTML(chatID, prompt, cancelKeyboard())
+		sess.LastMsgID = b.editOrSendHTML(chatID, sess.LastMsgID, prompt, cancelKeyboard())
 
 	case "file":
 		if sess.CurrentItem == nil {
@@ -318,7 +319,7 @@ func (b *Bot) handleCallback(cb *tgbotapi.CallbackQuery) {
 		sess.CurrentItem = nil
 		sess.Screen = sess.Back
 		b.send(chatID, "🗑 Удалено.")
-		b.sendStoragePage(chatID, sess)
+		b.sendStoragePage(chatID, sess, true)
 
 	case "back":
 		sess.Pending = ""
@@ -326,9 +327,9 @@ func (b *Bot) handleCallback(cb *tgbotapi.CallbackQuery) {
 		switch sess.Back {
 		case ScreenStorage:
 			sess.Screen = ScreenStorage
-			b.sendStoragePage(chatID, sess)
+			b.sendStoragePage(chatID, sess, false)
 		default:
-			b.showMainMenu(chatID)
+			b.showMainMenu(chatID, sess)
 		}
 
 	case "cancel":
@@ -337,14 +338,14 @@ func (b *Bot) handleCallback(cb *tgbotapi.CallbackQuery) {
 		if sess.Screen == ScreenItem && sess.CurrentItem != nil {
 			b.showItem(chatID, sess)
 		} else {
-			b.sendStoragePage(chatID, sess)
+			b.sendStoragePage(chatID, sess, false)
 		}
 	}
 }
 
 // ── Screens ───────────────────────────────────────────────────────────────────
 
-func (b *Bot) showMainMenu(chatID int64) {
+func (b *Bot) showMainMenu(chatID int64, sess *Session) {
 	text := "👋 Привет! Я твоё личное хранилище медиа.\n\nЧтобы сохранить файл — просто отправь его сюда.\nЧтобы найти — напиши текст или теги."
 	kb := tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
@@ -352,7 +353,7 @@ func (b *Bot) showMainMenu(chatID int64) {
 			tgbotapi.NewInlineKeyboardButtonData("🔍 Поиск", "search"),
 		),
 	)
-	b.sendHTML(chatID, text, &kb)
+	sess.LastMsgID = b.editOrSendHTML(chatID, sess.LastMsgID, text, &kb)
 }
 
 // loadStorageAndShow loads all items from stash (optionally force-reloading) and shows page 0.
@@ -377,12 +378,15 @@ func (b *Bot) loadStorageAndShow(chatID int64, sess *Session, reload bool) {
 	}
 	sess.Screen = ScreenStorage
 	sess.Back = ScreenMain
-	b.sendStoragePage(chatID, sess)
+	b.sendStoragePage(chatID, sess, true)
 }
 
-// sendStoragePage sends a text list of the current page items with navigation buttons.
-// Files are NOT downloaded here — only metadata is shown. Files are sent on demand via "📥 Файл".
-func (b *Bot) sendStoragePage(chatID int64, sess *Session) {
+// sendStoragePage shows the current page.
+// When sendFiles is true, media files are sent first (new messages) and the control
+// message is always a new message (so it appears below the media).
+// When sendFiles is false (e.g. going back from item detail), only the control
+// message is updated — it is edited in place if possible.
+func (b *Bot) sendStoragePage(chatID int64, sess *Session, sendFiles bool) {
 	if len(sess.Items) == 0 {
 		slog.Info("sendStoragePage: empty")
 		kb := tgbotapi.NewInlineKeyboardMarkup(
@@ -391,7 +395,7 @@ func (b *Bot) sendStoragePage(chatID int64, sess *Session) {
 				tgbotapi.NewInlineKeyboardButtonData("🏠 Меню", "menu"),
 			),
 		)
-		b.sendHTML(chatID, "📦 Хранилище пусто.", &kb)
+		sess.LastMsgID = b.editOrSendHTML(chatID, sess.LastMsgID, "📦 Хранилище пусто.", &kb)
 		return
 	}
 
@@ -405,7 +409,7 @@ func (b *Bot) sendStoragePage(chatID int64, sess *Session) {
 
 	total := len(sess.Items)
 	totalPages := (total + pageSize - 1) / pageSize
-	slog.Info("sendStoragePage", "page", sess.CurrentPage, "total_pages", totalPages, "items_on_page", len(pageItems))
+	slog.Info("sendStoragePage", "page", sess.CurrentPage, "total_pages", totalPages, "items_on_page", len(pageItems), "send_files", sendFiles)
 
 	title := "📦 <b>Хранилище</b>"
 	if sess.Back != ScreenMain {
@@ -426,11 +430,24 @@ func (b *Bot) sendStoragePage(chatID int64, sess *Session) {
 		fmt.Fprintf(&sb, "%s %d. %s\n", mediaIcon(it.Type), start+i+1, escapeHTML(label))
 	}
 
-	// Send files first so the control message with buttons ends up at the bottom.
-	b.sendPageFiles(chatID, pageItems)
-
 	kb := storagePageKeyboard(sess.CurrentPage, totalPages)
-	b.sendHTML(chatID, sb.String(), &kb)
+
+	if sendFiles {
+		// Media files first so the control message appears below them.
+		b.sendPageFiles(chatID, pageItems)
+		// Kick off background prefetch for the next page.
+		nextStart := (sess.CurrentPage + 1) * pageSize
+		if nextStart < len(sess.Items) {
+			nextEnd := min(nextStart+pageSize, len(sess.Items))
+			toPreload := sess.Items[nextStart:nextEnd]
+			go b.prefetchItems(toPreload)
+		}
+		// Always send a new control message when media preceded it.
+		sess.LastMsgID = b.editOrSendHTML(chatID, 0, sb.String(), &kb)
+	} else {
+		// No new media — edit the existing control message if possible.
+		sess.LastMsgID = b.editOrSendHTML(chatID, sess.LastMsgID, sb.String(), &kb)
+	}
 }
 
 // showSelectMode replaces the navigation keyboard with numbered item buttons.
@@ -459,20 +476,20 @@ func (b *Bot) showSelectMode(chatID int64, sess *Session) {
 	})
 
 	kb := tgbotapi.NewInlineKeyboardMarkup(rows...)
-	b.sendHTML(chatID, "Выбери файл:", &kb)
+	sess.LastMsgID = b.editOrSendHTML(chatID, sess.LastMsgID, "Выбери файл:", &kb)
 }
 
-// showItem sends the item detail message.
+// showItem sends (or edits) the item detail message.
 func (b *Bot) showItem(chatID int64, sess *Session) {
 	if sess.CurrentItem == nil {
 		slog.Warn("showItem: no current item, falling back to main menu")
-		b.showMainMenu(chatID)
+		b.showMainMenu(chatID, sess)
 		return
 	}
 	slog.Info("showItem", "id", sess.CurrentItem.ID, "name", sess.CurrentItem.FileName)
 	text := formatItemDetail(sess.CurrentItem)
 	kb := itemDetailKeyboard(sess.CurrentItem)
-	b.sendHTML(chatID, text, &kb)
+	sess.LastMsgID = b.editOrSendHTML(chatID, sess.LastMsgID, text, &kb)
 }
 
 // ── Upload ────────────────────────────────────────────────────────────────────
@@ -572,7 +589,7 @@ func (b *Bot) doSearch(chatID int64, sess *Session, query string) {
 	sess.Back = ScreenMain
 	sess.Items = items
 	sess.CurrentPage = 0
-	b.sendStoragePage(chatID, sess)
+	b.sendStoragePage(chatID, sess, true)
 }
 
 // ── Page media sending ────────────────────────────────────────────────────────
@@ -639,18 +656,25 @@ func (b *Bot) sendMediaGroupItems(chatID int64, items []*stash.Item) {
 			continue
 		}
 
-		// Slow path: download from stash and buffer in memory.
-		slog.Info("sendMediaGroupItems: downloading", "id", it.ID, "name", it.FileName)
-		rc, _, err := b.stash.GetFile(ctx, it.ID)
-		if err != nil {
-			slog.Error("sendMediaGroupItems: get file", "id", it.ID, "error", err)
-			continue
-		}
-		data, err := io.ReadAll(rc)
-		rc.Close()
-		if err != nil {
-			slog.Error("sendMediaGroupItems: read", "id", it.ID, "error", err)
-			continue
+		// Slow(er) path: use prefetched cache or download from stash.
+		var data []byte
+		if cached, ok := b.fileCache.LoadAndDelete(it.ID); ok {
+			slog.Info("sendMediaGroupItems: using prefetch cache", "id", it.ID)
+			data = cached.([]byte)
+		} else {
+			slog.Info("sendMediaGroupItems: downloading", "id", it.ID, "name", it.FileName)
+			rc, _, err := b.stash.GetFile(ctx, it.ID)
+			if err != nil {
+				slog.Error("sendMediaGroupItems: get file", "id", it.ID, "error", err)
+				continue
+			}
+			var readErr error
+			data, readErr = io.ReadAll(rc)
+			rc.Close()
+			if readErr != nil {
+				slog.Error("sendMediaGroupItems: read", "id", it.ID, "error", readErr)
+				continue
+			}
 		}
 		fr := tgbotapi.FileReader{Name: it.FileName, Reader: bytes.NewReader(data)}
 		var inp interface{}
@@ -728,18 +752,25 @@ func (b *Bot) sendSingleItem(chatID int64, it *stash.Item) {
 		return
 	}
 
-	slog.Info("sendSingleItem: downloading", "id", it.ID, "name", it.FileName)
 	ctx := context.Background()
-	rc, _, err := b.stash.GetFile(ctx, it.ID)
-	if err != nil {
-		slog.Error("sendSingleItem: get file", "id", it.ID, "error", err)
-		return
-	}
-	data, err := io.ReadAll(rc)
-	rc.Close()
-	if err != nil {
-		slog.Error("sendSingleItem: read", "id", it.ID, "error", err)
-		return
+	var data []byte
+	if cached, ok := b.fileCache.LoadAndDelete(it.ID); ok {
+		slog.Info("sendSingleItem: using prefetch cache", "id", it.ID)
+		data = cached.([]byte)
+	} else {
+		slog.Info("sendSingleItem: downloading", "id", it.ID, "name", it.FileName)
+		rc, _, err := b.stash.GetFile(ctx, it.ID)
+		if err != nil {
+			slog.Error("sendSingleItem: get file", "id", it.ID, "error", err)
+			return
+		}
+		var readErr error
+		data, readErr = io.ReadAll(rc)
+		rc.Close()
+		if readErr != nil {
+			slog.Error("sendSingleItem: read", "id", it.ID, "error", readErr)
+			return
+		}
 	}
 
 	fr := tgbotapi.FileReader{Name: it.FileName, Reader: bytes.NewReader(data)}
@@ -1094,6 +1125,58 @@ func sanitizeUTF8(s string) string {
 }
 
 // ── Send helpers ──────────────────────────────────────────────────────────────
+
+// editOrSendHTML tries to edit an existing message (msgID != 0) in place.
+// Falls back to sending a new message when editing is not possible.
+// Returns the message ID of the resulting message.
+func (b *Bot) editOrSendHTML(chatID int64, msgID int, text string, kb *tgbotapi.InlineKeyboardMarkup) int {
+	if msgID != 0 {
+		edit := tgbotapi.NewEditMessageText(chatID, msgID, text)
+		edit.ParseMode = tgbotapi.ModeHTML
+		edit.ReplyMarkup = kb
+		if msg, err := b.api.Send(edit); err == nil {
+			return msg.MessageID
+		}
+	}
+	msg := tgbotapi.NewMessage(chatID, text)
+	msg.ParseMode = tgbotapi.ModeHTML
+	if kb != nil {
+		msg.ReplyMarkup = kb
+	}
+	if sent, err := b.api.Send(msg); err == nil {
+		return sent.MessageID
+	}
+	return msgID
+}
+
+// prefetchItems downloads stash bytes for items that don't yet have a Telegram file_id,
+// storing them in b.fileCache so the next sendMediaGroupItems / sendSingleItem call
+// can skip the stash download entirely. Runs in a background goroutine.
+func (b *Bot) prefetchItems(items []*stash.Item) {
+	ctx := context.Background()
+	for _, it := range items {
+		if it.TelegramFileID != nil && *it.TelegramFileID != "" {
+			continue // already cached in Telegram — no download needed
+		}
+		if _, ok := b.fileCache.Load(it.ID); ok {
+			continue // already prefetched
+		}
+		slog.Info("prefetch: downloading", "id", it.ID)
+		rc, _, err := b.stash.GetFile(ctx, it.ID)
+		if err != nil {
+			slog.Error("prefetch: get file", "id", it.ID, "error", err)
+			continue
+		}
+		data, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			slog.Error("prefetch: read", "id", it.ID, "error", err)
+			continue
+		}
+		b.fileCache.Store(it.ID, data)
+		slog.Info("prefetch: cached", "id", it.ID, "bytes", len(data))
+	}
+}
 
 func (b *Bot) send(chatID int64, text string) {
 	if _, err := b.api.Send(tgbotapi.NewMessage(chatID, text)); err != nil {
