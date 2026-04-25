@@ -52,6 +52,9 @@ func (b *Bot) handleUpload(msg *tgbotapi.Message, mediaType stash.MediaType) {
 	}
 	slog.Info("upload: done", "id", item.ID, "file_name", item.FileName)
 
+	// Cache the original Telegram file_id so storage view doesn't re-download.
+	persistTgFileID(b, item, fileID)
+
 	// Invalidate cached items so next storage visit reloads.
 	sess := b.session(msg.From.ID, msg.Chat.ID)
 	sess.CurrentItem = item
