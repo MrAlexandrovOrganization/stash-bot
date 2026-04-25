@@ -51,7 +51,7 @@ type mediaSlot struct {
 // message ID of the last message in the group (for attaching navigation controls).
 func sendMediaGroupItems(b *Bot, chatID int64, items []*stash.Item) int {
 	ctx := context.Background()
-	media := make([]interface{}, 0, len(items))
+	media := make([]any, 0, len(items))
 	slots := make([]mediaSlot, 0, len(items))
 
 	for _, it := range items {
@@ -61,7 +61,7 @@ func sendMediaGroupItems(b *Bot, chatID int64, items []*stash.Item) int {
 			// Fast path: already known to Telegram.
 			slog.Info("sendMediaGroupItems: cached", "id", it.ID)
 			fid := tgbotapi.FileID(*it.TelegramFileID)
-			var inp interface{}
+			var inp any
 			switch it.Type {
 			case stash.MediaTypeImage:
 				m := tgbotapi.NewInputMediaPhoto(fid)
@@ -102,7 +102,7 @@ func sendMediaGroupItems(b *Bot, chatID int64, items []*stash.Item) int {
 			}
 		}
 		fr := tgbotapi.FileReader{Name: it.FileName, Reader: bytes.NewReader(data)}
-		var inp interface{}
+		var inp any
 		switch it.Type {
 		case stash.MediaTypeImage:
 			m := tgbotapi.NewInputMediaPhoto(fr)
