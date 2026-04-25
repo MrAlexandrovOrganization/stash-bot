@@ -32,7 +32,7 @@ func (b *Bot) handleTextInput(msg *tgbotapi.Message, sess *Session) {
 			b.send(msg.Chat.ID, "Ошибка при обновлении описания.")
 			return
 		}
-		b.applyItemUpdate(sess, updated)
+		applyItemUpdate(sess, updated)
 		b.showItem(msg.Chat.ID, sess)
 
 	case "tags":
@@ -47,7 +47,7 @@ func (b *Bot) handleTextInput(msg *tgbotapi.Message, sess *Session) {
 			b.send(msg.Chat.ID, "Ошибка при обновлении тегов.")
 			return
 		}
-		b.applyItemUpdate(sess, updated)
+		applyItemUpdate(sess, updated)
 		b.showItem(msg.Chat.ID, sess)
 
 	case "tr":
@@ -61,7 +61,7 @@ func (b *Bot) handleTextInput(msg *tgbotapi.Message, sess *Session) {
 			b.send(msg.Chat.ID, "Ошибка при обновлении расшифровки.")
 			return
 		}
-		b.applyItemUpdate(sess, updated)
+		applyItemUpdate(sess, updated)
 		b.showItem(msg.Chat.ID, sess)
 
 	default:
@@ -71,7 +71,7 @@ func (b *Bot) handleTextInput(msg *tgbotapi.Message, sess *Session) {
 }
 
 // applyItemUpdate refreshes the item in the session's item list and CurrentItem.
-func (b *Bot) applyItemUpdate(sess *Session, updated *stash.Item) {
+func applyItemUpdate(sess *Session, updated *stash.Item) {
 	sess.CurrentItem = updated
 	for i, it := range sess.Items {
 		if it.ID == updated.ID {
