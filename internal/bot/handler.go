@@ -19,7 +19,7 @@ func (b *Bot) handleTextInput(msg *tgbotapi.Message, sess *Session) {
 	switch sess.Pending {
 	case "search":
 		sess.Pending = ""
-		b.doSearch(msg.Chat.ID, sess, text)
+		doSearch(b, msg.Chat.ID, sess, text)
 
 	case "desc":
 		sess.Pending = ""
@@ -66,7 +66,7 @@ func (b *Bot) handleTextInput(msg *tgbotapi.Message, sess *Session) {
 
 	default:
 		// No pending state: treat message as a search query.
-		b.doSearch(msg.Chat.ID, sess, text)
+		doSearch(b, msg.Chat.ID, sess, text)
 	}
 }
 
@@ -83,7 +83,7 @@ func applyItemUpdate(sess *Session, updated *stash.Item) {
 
 // ── Search ────────────────────────────────────────────────────────────────────
 
-func (b *Bot) doSearch(chatID int64, sess *Session, query string) {
+func doSearch(b *Bot, chatID int64, sess *Session, query string) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		b.send(chatID, "Введи текст для поиска.")
