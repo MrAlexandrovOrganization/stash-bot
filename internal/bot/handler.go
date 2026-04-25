@@ -12,9 +12,10 @@ import (
 
 // ── Text input ────────────────────────────────────────────────────────────────
 
-func (b *Bot) handleTextInput(msg *tgbotapi.Message, sess *Session) {
+func (b *Bot) handleTextInput(msg *tgbotapi.Message) {
 	ctx := context.Background()
 	text := strings.TrimSpace(msg.Text)
+	sess := b.session(msg.From.ID, msg.Chat.ID)
 
 	switch sess.Pending {
 	case "search":

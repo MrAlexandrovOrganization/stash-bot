@@ -52,6 +52,6 @@ func (b *Bot) handleUpdate(update tgbotapi.Update) {
 	}
 
 	if msg.Text != "" {
-		b.handleTextInput(msg, sess)
+		b.handleTextInput(msg)
 	}
 }
