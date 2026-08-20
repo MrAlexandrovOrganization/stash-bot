@@ -43,4 +43,4 @@ jobs:
           script: |
             cd ${{ secrets.VM_PROJECT_PATH }}
             git pull
-            make deploy
+            make up
