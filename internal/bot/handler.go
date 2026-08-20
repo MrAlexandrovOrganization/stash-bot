@@ -7,12 +7,13 @@ import (
 
 	"stash-bot/internal/stash"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/mymmrac/telego"
+	tu "github.com/mymmrac/telego/telegoutil"
 )
 
 // ── Text input ────────────────────────────────────────────────────────────────
 
-func (b *Bot) handleTextInput(msg *tgbotapi.Message) {
+func (b *Bot) handleTextInput(msg *telego.Message) {
 	ctx := context.Background()
 	text := strings.TrimSpace(msg.Text)
 	sess := b.session(msg.From.ID, msg.Chat.ID)
@@ -24,51 +25,36 @@ func (b *Bot) handleTextInput(msg *tgbotapi.Message) {
 
 	case "desc":
 		sess.Pending = ""
-		if sess.CurrentItem == nil {
-			return
-		}
-		updated, err := b.stash.Update(ctx, sess.CurrentItem.ID, stash.UpdateMeta{Description: &text})
-		if err != nil {
-			slog.Error("update desc", "error", err)
-			send(b, msg.Chat.ID, "Ошибка при обновлении описания.")
-			return
-		}
-		applyItemUpdate(sess, updated)
-		showItem(b, msg.Chat.ID, sess)
+		updateCurrentItem(b, ctx, msg.Chat.ID, sess, stash.UpdateMeta{Description: &text}, "Ошибка при обновлении описания.")
 
 	case "tags":
 		sess.Pending = ""
-		if sess.CurrentItem == nil {
-			return
-		}
 		tags := parseTags(text)
-		updated, err := b.stash.Update(ctx, sess.CurrentItem.ID, stash.UpdateMeta{Tags: tags})
-		if err != nil {
-			slog.Error("update tags", "error", err)
-			send(b, msg.Chat.ID, "Ошибка при обновлении тегов.")
-			return
-		}
-		applyItemUpdate(sess, updated)
-		showItem(b, msg.Chat.ID, sess)
+		updateCurrentItem(b, ctx, msg.Chat.ID, sess, stash.UpdateMeta{Tags: tags}, "Ошибка при обновлении тегов.")
 
 	case "tr":
 		sess.Pending = ""
-		if sess.CurrentItem == nil {
-			return
-		}
-		updated, err := b.stash.Update(ctx, sess.CurrentItem.ID, stash.UpdateMeta{Transcript: &text})
-		if err != nil {
-			slog.Error("update transcript", "error", err)
-			send(b, msg.Chat.ID, "Ошибка при обновлении расшифровки.")
-			return
-		}
-		applyItemUpdate(sess, updated)
-		showItem(b, msg.Chat.ID, sess)
+		updateCurrentItem(b, ctx, msg.Chat.ID, sess, stash.UpdateMeta{Transcript: &text}, "Ошибка при обновлении расшифровки.")
 
 	default:
 		// No pending state: treat message as a search query.
 		doSearch(b, msg.Chat.ID, sess, text)
 	}
+}
+
+// updateCurrentItem updates a field of the current item, refreshes the session, and shows the item.
+func updateCurrentItem(b *Bot, ctx context.Context, chatID int64, sess *Session, meta stash.UpdateMeta, errMsg string) {
+	if sess.CurrentItem == nil {
+		return
+	}
+	updated, err := b.stash.Update(ctx, sess.CurrentItem.ID, meta)
+	if err != nil {
+		slog.Error("updateCurrentItem", "error", err)
+		send(b, chatID, errMsg)
+		return
+	}
+	applyItemUpdate(sess, updated)
+	showItem(b, chatID, sess)
 }
 
 // applyItemUpdate refreshes the item in the session's item list and CurrentItem.
@@ -91,11 +77,10 @@ func doSearch(b *Bot, chatID int64, sess *Session, query string) {
 		return
 	}
 
-	ctx := context.Background()
 	text, posTags, negTags := parseSearchQuery(query)
 	slog.Info("search", "text", text, "pos_tags", posTags, "neg_tags", negTags)
 
-	items, err := b.stash.Search(ctx, stash.SearchQuery{Text: text, Tags: posTags})
+	items, err := b.stash.Search(context.Background(), stash.SearchQuery{Text: text, Tags: posTags})
 	if err != nil {
 		slog.Error("search: stash failed", "error", err)
 		send(b, chatID, "Ошибка поиска.")
@@ -115,13 +100,13 @@ func doSearch(b *Bot, chatID int64, sess *Session, query string) {
 	}
 
 	if len(items) == 0 {
-		kb := tgbotapi.NewInlineKeyboardMarkup(
-			tgbotapi.NewInlineKeyboardRow(
-				tgbotapi.NewInlineKeyboardButtonData("🔍 Поиск ещё раз", "search"),
-				tgbotapi.NewInlineKeyboardButtonData("🏠 Меню", "menu"),
+		kb := tu.InlineKeyboard(
+			tu.InlineKeyboardRow(
+				tu.InlineKeyboardButton("🔍 Поиск ещё раз").WithCallbackData("search"),
+				tu.InlineKeyboardButton("🏠 Меню").WithCallbackData("menu"),
 			),
 		)
-		sendHTML(b, chatID, "Ничего не найдено.", &kb)
+		sendHTML(b, chatID, "Ничего не найдено.", kb)
 		return
 	}
 

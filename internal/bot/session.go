@@ -28,7 +28,11 @@ type Session struct {
 	// Pending text input. Values: "desc", "tags", "tr", "search"
 	Pending string
 
-	// LastMsgID is the message ID of the last bot control message (text+keyboard).
+	// LastMsgID is the message ID of the bot control message (text+keyboard).
 	// Used to edit the message in place instead of sending a new one.
 	LastMsgID int
+
+	// MediaMsgIDs holds message IDs of the currently displayed page media.
+	// Populated when files are sent; cleared when navigating away from storage.
+	MediaMsgIDs []int
 }

@@ -2,14 +2,16 @@ package bot
 
 import (
 	"log/slog"
+
 	"stash-bot/internal/stash"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/mymmrac/telego"
+	tu "github.com/mymmrac/telego/telegoutil"
 )
 
 // ── Update routing ────────────────────────────────────────────────────────────
 
-func (b *Bot) handleUpdate(update tgbotapi.Update) {
+func (b *Bot) handleUpdate(update telego.Update) {
 	if update.CallbackQuery != nil {
 		b.handleCallback(update.CallbackQuery)
 		return
@@ -18,8 +20,13 @@ func (b *Bot) handleUpdate(update tgbotapi.Update) {
 		return
 	}
 	msg := update.Message
-	if msg.From.ID != b.rootID {
-		slog.Warn("unauthorized", "user_id", msg.From.ID)
+	if msg.From == nil || msg.From.ID != b.rootID {
+		slog.Warn("unauthorized", "user_id", func() int64 {
+			if msg.From != nil {
+				return msg.From.ID
+			}
+			return 0
+		}())
 		return
 	}
 
@@ -45,7 +52,8 @@ func (b *Bot) handleUpdate(update tgbotapi.Update) {
 		return
 	}
 
-	if msg.Command() == "start" {
+	cmd, _, _ := tu.ParseCommand(msg.Text)
+	if cmd == "start" {
 		sess.Pending = ""
 		showMainMenu(b, msg.Chat.ID, sess)
 		return

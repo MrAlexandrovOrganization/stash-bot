@@ -8,12 +8,12 @@ import (
 
 	"stash-bot/internal/stash"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/mymmrac/telego"
 )
 
 // ── Upload ────────────────────────────────────────────────────────────────────
 
-func (b *Bot) handleUpload(msg *tgbotapi.Message, mediaType stash.MediaType) {
+func (b *Bot) handleUpload(msg *telego.Message, mediaType stash.MediaType) {
 	ctx := context.Background()
 
 	fileID, fileName, contentType := extractFileInfo(msg, mediaType)
@@ -25,13 +25,14 @@ func (b *Bot) handleUpload(msg *tgbotapi.Message, mediaType stash.MediaType) {
 
 	description, tags := parseCaption(msg.Caption)
 
-	fileURL, err := b.api.GetFileDirectURL(fileID)
+	file, err := b.api.GetFile(ctx, &telego.GetFileParams{FileID: fileID})
 	if err != nil {
-		slog.Error("upload: get file url", "error", err)
-		send(b, msg.Chat.ID, "Не удалось скачать файл из Telegram.")
+		slog.Error("upload: get file", "error", err)
+		send(b, msg.Chat.ID, "Не удалось получить файл из Telegram.")
 		return
 	}
 
+	fileURL := b.api.FileDownloadURL(file.FilePath)
 	resp, err := http.Get(fileURL) //nolint:noctx
 	if err != nil {
 		slog.Error("upload: http get failed", "error", err)
@@ -64,7 +65,7 @@ func (b *Bot) handleUpload(msg *tgbotapi.Message, mediaType stash.MediaType) {
 	showItem(b, msg.Chat.ID, sess)
 }
 
-func extractFileInfo(msg *tgbotapi.Message, mediaType stash.MediaType) (fileID, fileName, contentType string) {
+func extractFileInfo(msg *telego.Message, mediaType stash.MediaType) (fileID, fileName, contentType string) {
 	switch mediaType {
 	case stash.MediaTypeImage:
 		if len(msg.Photo) == 0 {

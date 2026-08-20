@@ -1,9 +1,11 @@
 package bot
 
 import (
+	"context"
 	"log/slog"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/mymmrac/telego"
+	tu "github.com/mymmrac/telego/telegoutil"
 )
 
 // ── Send helpers ──────────────────────────────────────────────────────────────
@@ -11,39 +13,38 @@ import (
 // editOrSendHTML tries to edit an existing message (msgID != 0) in place.
 // Falls back to sending a new message when editing is not possible.
 // Returns the message ID of the resulting message.
-func editOrSendHTML(b *Bot, chatID int64, msgID int, text string, kb *tgbotapi.InlineKeyboardMarkup) int {
+func editOrSendHTML(b *Bot, chatID int64, msgID int, text string, kb *telego.InlineKeyboardMarkup) int {
+	ctx := context.Background()
 	if msgID != 0 {
-		edit := tgbotapi.NewEditMessageText(chatID, msgID, text)
-		edit.ParseMode = tgbotapi.ModeHTML
-		edit.ReplyMarkup = kb
-		if msg, err := b.api.Send(edit); err == nil {
+		params := tu.EditMessageText(tu.ID(chatID), msgID, text).
+			WithParseMode(telego.ModeHTML).
+			WithReplyMarkup(kb)
+		if msg, err := b.api.EditMessageText(ctx, params); err == nil {
 			return msg.MessageID
 		}
 	}
-	msg := tgbotapi.NewMessage(chatID, text)
-	msg.ParseMode = tgbotapi.ModeHTML
+	params := tu.Message(tu.ID(chatID), text).WithParseMode(telego.ModeHTML)
 	if kb != nil {
-		msg.ReplyMarkup = kb
+		params = params.WithReplyMarkup(kb)
 	}
-	if sent, err := b.api.Send(msg); err == nil {
+	if sent, err := b.api.SendMessage(ctx, params); err == nil {
 		return sent.MessageID
 	}
 	return msgID
 }
 
 func send(b *Bot, chatID int64, text string) {
-	if _, err := b.api.Send(tgbotapi.NewMessage(chatID, text)); err != nil {
+	if _, err := b.api.SendMessage(context.Background(), tu.Message(tu.ID(chatID), text)); err != nil {
 		slog.Error("send", "error", err)
 	}
 }
 
-func sendHTML(b *Bot, chatID int64, text string, kb *tgbotapi.InlineKeyboardMarkup) {
-	msg := tgbotapi.NewMessage(chatID, text)
-	msg.ParseMode = tgbotapi.ModeHTML
+func sendHTML(b *Bot, chatID int64, text string, kb *telego.InlineKeyboardMarkup) {
+	params := tu.Message(tu.ID(chatID), text).WithParseMode(telego.ModeHTML)
 	if kb != nil {
-		msg.ReplyMarkup = kb
+		params = params.WithReplyMarkup(kb)
 	}
-	if _, err := b.api.Send(msg); err != nil {
+	if _, err := b.api.SendMessage(context.Background(), params); err != nil {
 		slog.Error("sendHTML", "error", err)
 	}
 }

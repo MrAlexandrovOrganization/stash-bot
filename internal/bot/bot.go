@@ -1,16 +1,17 @@
 package bot
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"stash-bot/internal/stash"
 	"sync"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/mymmrac/telego"
 )
 
 type Bot struct {
-	api       *tgbotapi.BotAPI
+	api       *telego.Bot
 	stash     *stash.Client
 	rootID    int64
 	sessions  sync.Map // int64 (userID) → *Session
@@ -18,7 +19,7 @@ type Bot struct {
 }
 
 func New(token string, rootID int64, stashClient *stash.Client) (*Bot, error) {
-	api, err := tgbotapi.NewBotAPI(token)
+	api, err := telego.NewBot(token)
 	if err != nil {
 		return nil, fmt.Errorf("telegram bot: %w", err)
 	}
@@ -30,10 +31,13 @@ func New(token string, rootID int64, stashClient *stash.Client) (*Bot, error) {
 }
 
 func (b *Bot) Run() {
-	u := tgbotapi.NewUpdate(0)
-	u.Timeout = 60
-	updates := b.api.GetUpdatesChan(u)
-	slog.Info("bot started", "username", b.api.Self.UserName)
+	ctx := context.Background()
+	updates, err := b.api.UpdatesViaLongPolling(ctx, nil)
+	if err != nil {
+		slog.Error("bot: long polling failed", "error", err)
+		return
+	}
+	slog.Info("bot started", "username", b.api.Username())
 	for update := range updates {
 		go b.handleUpdate(update)
 	}

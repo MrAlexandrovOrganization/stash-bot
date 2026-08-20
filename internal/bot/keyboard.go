@@ -5,55 +5,53 @@ import (
 
 	"stash-bot/internal/stash"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/mymmrac/telego"
+	tu "github.com/mymmrac/telego/telegoutil"
 )
 
 // ── Keyboards ─────────────────────────────────────────────────────────────────
 
-func storagePageKeyboard(page, totalPages int) tgbotapi.InlineKeyboardMarkup {
-	var navRow []tgbotapi.InlineKeyboardButton
+func storagePageKeyboard(page, totalPages int) *telego.InlineKeyboardMarkup {
+	var navRow []telego.InlineKeyboardButton
 	if page > 0 {
-		navRow = append(navRow, tgbotapi.NewInlineKeyboardButtonData("◀", fmt.Sprintf("sp:%d", page-1)))
+		navRow = append(navRow, tu.InlineKeyboardButton("◀").WithCallbackData(fmt.Sprintf("sp:%d", page-1)))
 	}
-	navRow = append(navRow, tgbotapi.NewInlineKeyboardButtonData(
-		fmt.Sprintf("%d / %d", page+1, totalPages), "noop",
-	))
+	navRow = append(navRow, tu.InlineKeyboardButton(fmt.Sprintf("%d / %d", page+1, totalPages)).WithCallbackData("noop"))
 	if page < totalPages-1 {
-		navRow = append(navRow, tgbotapi.NewInlineKeyboardButtonData("▶", fmt.Sprintf("sp:%d", page+1)))
+		navRow = append(navRow, tu.InlineKeyboardButton("▶").WithCallbackData(fmt.Sprintf("sp:%d", page+1)))
 	}
 
-	actionRow := tgbotapi.NewInlineKeyboardRow(
-		tgbotapi.NewInlineKeyboardButtonData("✅ Выбрать", "ssel"),
-		tgbotapi.NewInlineKeyboardButtonData("🔍 Поиск", "search"),
-		tgbotapi.NewInlineKeyboardButtonData("🏠 Меню", "menu"),
+	actionRow := tu.InlineKeyboardRow(
+		tu.InlineKeyboardButton("✅ Выбрать").WithCallbackData("ssel"),
+		tu.InlineKeyboardButton("🔍 Поиск").WithCallbackData("search"),
+		tu.InlineKeyboardButton("🏠 Меню").WithCallbackData("menu"),
 	)
 
-	return tgbotapi.NewInlineKeyboardMarkup(navRow, actionRow)
+	return tu.InlineKeyboard(navRow, actionRow)
 }
 
-func itemDetailKeyboard(item *stash.Item) tgbotapi.InlineKeyboardMarkup {
-	editRow := []tgbotapi.InlineKeyboardButton{
-		tgbotapi.NewInlineKeyboardButtonData("✏️ Описание", "edit:desc"),
-		tgbotapi.NewInlineKeyboardButtonData("🏷 Теги", "edit:tags"),
+func itemDetailKeyboard(item *stash.Item) *telego.InlineKeyboardMarkup {
+	editRow := []telego.InlineKeyboardButton{
+		tu.InlineKeyboardButton("✏️ Описание").WithCallbackData("edit:desc"),
+		tu.InlineKeyboardButton("🏷 Теги").WithCallbackData("edit:tags"),
 	}
 	if item.Type == stash.MediaTypeVideo {
-		editRow = append(editRow, tgbotapi.NewInlineKeyboardButtonData("📄 Расшифровка", "edit:tr"))
+		editRow = append(editRow, tu.InlineKeyboardButton("📄 Расшифровка").WithCallbackData("edit:tr"))
 	}
 
-	actionRow := tgbotapi.NewInlineKeyboardRow(
-		tgbotapi.NewInlineKeyboardButtonData("📥 Файл", "file"),
-		tgbotapi.NewInlineKeyboardButtonData("🗑 Удалить", "del"),
-		tgbotapi.NewInlineKeyboardButtonData("◀ Назад", "back"),
+	actionRow := tu.InlineKeyboardRow(
+		tu.InlineKeyboardButton("📥 Файл").WithCallbackData("file"),
+		tu.InlineKeyboardButton("🗑 Удалить").WithCallbackData("del"),
+		tu.InlineKeyboardButton("◀ Назад").WithCallbackData("back"),
 	)
 
-	return tgbotapi.NewInlineKeyboardMarkup(editRow, actionRow)
+	return tu.InlineKeyboard(editRow, actionRow)
 }
 
-func cancelKeyboard() *tgbotapi.InlineKeyboardMarkup {
-	kb := tgbotapi.NewInlineKeyboardMarkup(
-		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("Отмена", "cancel"),
+func cancelKeyboard() *telego.InlineKeyboardMarkup {
+	return tu.InlineKeyboard(
+		tu.InlineKeyboardRow(
+			tu.InlineKeyboardButton("Отмена").WithCallbackData("cancel"),
 		),
 	)
-	return &kb
 }
