@@ -19,7 +19,10 @@ const pageSize = 10
 // ── Screens ───────────────────────────────────────────────────────────────────
 
 func showMainMenu(b *Bot, chatID int64, sess *Session) {
-	deleteMediaMessages(b, chatID, sess)
+	// Note: we deliberately keep the media messages (sess.MediaMsgIDs) in the
+	// chat instead of deleting them, so returning to storage can reuse them
+	// without re-sending. A reload (handled in loadStorageAndShow) still
+	// re-sends and clears them when needed.
 	text := "👋 Привет! Я твоё личное хранилище медиа.\n\nЧтобы сохранить файл — просто отправь его сюда.\nЧтобы найти — напиши текст или теги."
 	kb := tu.InlineKeyboard(
 		tu.InlineKeyboardRow(
@@ -73,7 +76,13 @@ func loadStorageAndShow(b *Bot, chatID int64, sess *Session, reload bool) {
 	}
 	sess.Screen = ScreenStorage
 	sess.Back = ScreenMain
-	sendStoragePage(b, chatID, sess, true)
+
+	// Reuse already-sent media when returning to the same page without
+	// reloading the item list (e.g. menu → storage). This avoids re-sending
+	// and thus re-downloading media on every open. A reload (new upload, first
+	// open) always re-sends, which also clears any stale media first.
+	reuseMedia := !reload && len(sess.MediaMsgIDs) > 0
+	sendStoragePage(b, chatID, sess, !reuseMedia)
 }
 
 // sendStoragePage shows the current page.
