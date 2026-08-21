@@ -26,9 +26,17 @@ var itemFields = []struct {
 		}
 		return strings.Join(tagged, " ")
 	}},
+	{"👤 Источник", func(it *stash.Item) string { return it.Source }},
+	{"💬 Подпись", func(it *stash.Item) string { return it.OriginalCaption }},
 	{"📄 Расшифровка", func(it *stash.Item) string {
 		if it.Transcript != nil {
 			return *it.Transcript
+		}
+		return ""
+	}},
+	{"🤖 Нейроописание", func(it *stash.Item) string {
+		if it.AIDescription != nil {
+			return *it.AIDescription
 		}
 		return ""
 	}},

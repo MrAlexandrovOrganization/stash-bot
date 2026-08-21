@@ -46,6 +46,12 @@ func (c *Client) Upload(ctx context.Context, r io.Reader, fileName, contentType 
 		if len(meta.Tags) > 0 {
 			_ = mw.WriteField("tags", strings.Join(meta.Tags, ","))
 		}
+		if meta.Source != "" {
+			_ = mw.WriteField("source", meta.Source)
+		}
+		if meta.OriginalCaption != "" {
+			_ = mw.WriteField("original_caption", meta.OriginalCaption)
+		}
 		mw.Close()
 	}()
 

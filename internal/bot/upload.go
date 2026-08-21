@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"stash-bot/internal/stash"
 
@@ -43,8 +44,10 @@ func (b *Bot) handleUpload(msg *telego.Message, mediaType stash.MediaType) {
 	slog.Info("upload: uploading to stash", "file_name", fileName, "size", resp.ContentLength)
 
 	item, err := b.stash.Upload(ctx, resp.Body, fileName, contentType, resp.ContentLength, stash.UploadMeta{
-		Description: description,
-		Tags:        tags,
+		Description:     description,
+		Tags:            tags,
+		Source:          forwardSource(msg),
+		OriginalCaption: msg.Caption,
 	})
 	if err != nil {
 		slog.Error("upload: stash upload failed", "error", err)
@@ -63,6 +66,32 @@ func (b *Bot) handleUpload(msg *telego.Message, mediaType stash.MediaType) {
 	sess.Back = ScreenStorage
 	sess.Items = nil
 	showItem(b, msg.Chat.ID, sess)
+}
+
+// forwardSource returns a human-readable name of the original sender for
+// forwarded messages. Empty for messages sent directly to the bot.
+func forwardSource(msg *telego.Message) string {
+	switch o := msg.ForwardOrigin.(type) {
+	case *telego.MessageOriginUser:
+		name := strings.TrimSpace(o.SenderUser.FirstName + " " + o.SenderUser.LastName)
+		if o.SenderUser.Username != "" {
+			name += fmt.Sprintf(" (@%s)", o.SenderUser.Username)
+		}
+		return name
+	case *telego.MessageOriginHiddenUser:
+		return o.SenderUserName
+	case *telego.MessageOriginChat:
+		if o.AuthorSignature != "" {
+			return strings.TrimSpace(o.SenderChat.Title + " · " + o.AuthorSignature)
+		}
+		return o.SenderChat.Title
+	case *telego.MessageOriginChannel:
+		if o.AuthorSignature != "" {
+			return strings.TrimSpace(o.Chat.Title + " · " + o.AuthorSignature)
+		}
+		return o.Chat.Title
+	}
+	return ""
 }
 
 func extractFileInfo(msg *telego.Message, mediaType stash.MediaType) (fileID, fileName, contentType string) {

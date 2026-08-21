@@ -12,16 +12,19 @@ const (
 )
 
 type Item struct {
-	ID             string    `json:"id"`
-	Type           MediaType `json:"type"`
-	FileName       string    `json:"file_name"`
-	ContentType    string    `json:"content_type"`
-	Size           int64     `json:"size"`
-	Description    string    `json:"description"`
-	Tags           []string  `json:"tags"`
-	Transcript     *string   `json:"transcript,omitempty"`
-	TelegramFileID *string   `json:"telegram_file_id,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
+	ID              string    `json:"id"`
+	Type            MediaType `json:"type"`
+	FileName        string    `json:"file_name"`
+	ContentType     string    `json:"content_type"`
+	Size            int64     `json:"size"`
+	Description     string    `json:"description"`
+	Tags            []string  `json:"tags"`
+	Source          string    `json:"source"`
+	OriginalCaption string    `json:"original_caption"`
+	Transcript      *string   `json:"transcript,omitempty"`
+	AIDescription   *string   `json:"ai_description,omitempty"`
+	TelegramFileID  *string   `json:"telegram_file_id,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 type SearchQuery struct {
@@ -30,8 +33,10 @@ type SearchQuery struct {
 }
 
 type UploadMeta struct {
-	Description string
-	Tags        []string
+	Description     string
+	Tags            []string
+	Source          string
+	OriginalCaption string
 }
 
 type UpdateMeta struct {
