@@ -111,11 +111,15 @@ func sendMediaGroupItems(b *Bot, chatID int64, items []*stash.Item) []int {
 		return nil
 	}
 
-	slog.Info("sendMediaGroupItems: sending group", "count", len(media))
+	slog.Info("sendMediaGroupItems: sending group", "input_count", len(media))
 	sentMsgs, err := b.api.SendMediaGroup(context.Background(), tu.MediaGroup(tu.ID(chatID), media...))
 	if err != nil {
 		slog.Error("sendMediaGroupItems: send", "error", err)
 		return nil
+	}
+	if len(sentMsgs) != len(media) {
+		slog.Warn("sendMediaGroupItems: sent/received count mismatch — some items may not be cached",
+			"input_count", len(media), "sent_count", len(sentMsgs))
 	}
 
 	cacheMediaGroupFileIDs(b, slots, sentMsgs)
@@ -203,16 +207,17 @@ func sendFile(b *Bot, chatID int64, item *stash.Item) {
 // No caption is set here — the page text is applied to the last message after the group is sent.
 func prepareMediaInput(b *Bot, it *stash.Item) (telego.InputMedia, bool, error) {
 	if fid, ok := b.lookupFileID(it.ID); ok {
-		slog.Info("prepareMediaInput: cached", "id", it.ID)
+		slog.Info("prepareMediaInput: cached (fileIDCache)", "id", it.ID, "type", it.Type)
 		inp := buildGroupInput(it.Type, tu.FileFromID(fid))
 		return inp, false, nil
 	}
 	if it.TelegramFileID != nil && *it.TelegramFileID != "" {
-		slog.Info("prepareMediaInput: cached", "id", it.ID)
+		slog.Info("prepareMediaInput: cached (item)", "id", it.ID, "type", it.Type)
 		inp := buildGroupInput(it.Type, tu.FileFromID(*it.TelegramFileID))
 		return inp, false, nil
 	}
 
+	slog.Info("prepareMediaInput: DOWNLOAD from backend required", "id", it.ID, "type", it.Type)
 	data, err := loadItemData(b, it)
 	if err != nil {
 		return nil, false, err
@@ -222,15 +227,91 @@ func prepareMediaInput(b *Bot, it *stash.Item) (telego.InputMedia, bool, error) 
 }
 
 // cacheMediaGroupFileIDs persists Telegram file_ids for freshly uploaded items in a group.
+//
+// Telegram may return album messages in an order different from the one we sent,
+// or drop an element entirely. We therefore do NOT rely on positional mapping:
+// each fresh slot is matched to an unused response message by media type first,
+// then to any remaining message. This keeps video file_ids from being silently
+// dropped (which previously caused re-downloads on every storage open).
 func cacheMediaGroupFileIDs(b *Bot, slots []mediaSlot, sentMsgs []telego.Message) {
-	for i, slot := range slots {
-		if !slot.isNew || i >= len(sentMsgs) {
+	used := make([]bool, len(sentMsgs))
+	for _, slot := range slots {
+		if !slot.isNew {
 			continue
 		}
-		if tgID := extractSentFileID(slot.item.Type, sentMsgs[i]); tgID != "" {
-			persistTgFileID(b, slot.item, tgID)
+		tgID := bestFileIDForType(slot.item.Type, sentMsgs, used)
+		if tgID == "" {
+			slog.Warn("cacheMediaGroupFileIDs: no file_id found for item",
+				"id", slot.item.ID, "type", slot.item.Type, "sent_count", len(sentMsgs))
+			continue
+		}
+		persistTgFileID(b, slot.item, tgID)
+	}
+}
+
+// bestFileIDForType returns a file_id for the given media type from an unused
+// response message. It prefers an exact type match, then falls back to any media.
+func bestFileIDForType(mt stash.MediaType, msgs []telego.Message, used []bool) string {
+	for j, m := range msgs {
+		if used[j] {
+			continue
+		}
+		if id := exactTypeFileID(mt, m); id != "" {
+			used[j] = true
+			return id
 		}
 	}
+	for j, m := range msgs {
+		if used[j] {
+			continue
+		}
+		if id := anyFileID(m); id != "" {
+			used[j] = true
+			return id
+		}
+	}
+	return ""
+}
+
+// exactTypeFileID returns a file_id only if the message is of the expected type.
+func exactTypeFileID(mt stash.MediaType, m telego.Message) string {
+	switch mt {
+	case stash.MediaTypeImage:
+		if len(m.Photo) > 0 {
+			return m.Photo[len(m.Photo)-1].FileID
+		}
+	case stash.MediaTypeVideo:
+		if m.Video != nil {
+			return m.Video.FileID
+		}
+	case stash.MediaTypeGIF:
+		if m.Animation != nil {
+			return m.Animation.FileID
+		}
+	default:
+		if m.Document != nil {
+			return m.Document.FileID
+		}
+	}
+	return ""
+}
+
+// anyFileID returns whichever file_id a message carries, preferring video/document
+// over photo (photos are cheap to re-fetch but we still need something stable).
+func anyFileID(m telego.Message) string {
+	if m.Video != nil {
+		return m.Video.FileID
+	}
+	if m.Animation != nil {
+		return m.Animation.FileID
+	}
+	if m.Document != nil {
+		return m.Document.FileID
+	}
+	if len(m.Photo) > 0 {
+		return m.Photo[len(m.Photo)-1].FileID
+	}
+	return ""
 }
 
 // ── Single item helpers ───────────────────────────────────────────────────────
