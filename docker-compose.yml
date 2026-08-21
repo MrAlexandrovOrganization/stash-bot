@@ -9,6 +9,11 @@ services:
     networks:
       - stash-bot-net
       - stash-api-net
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "0.5"
 
 networks:
   stash-bot-net:
