@@ -371,6 +371,9 @@ func sendFileByType(ctx context.Context, b *Bot, chatID int64, mediaType stash.M
 }
 
 // extractSentFileID extracts the Telegram file_id from a sent message.
+// It prefers the field matching the expected media type, but falls back to any
+// media Telegram actually returned — a video can come back as a document
+// message inside a media group, in which case only .Document is populated.
 func extractSentFileID(mediaType stash.MediaType, sent telego.Message) string {
 	switch mediaType {
 	case stash.MediaTypeImage:
@@ -389,6 +392,19 @@ func extractSentFileID(mediaType stash.MediaType, sent telego.Message) string {
 		if sent.Document != nil {
 			return sent.Document.FileID
 		}
+	}
+	// Fallback: grab whichever media field Telegram populated.
+	if sent.Video != nil {
+		return sent.Video.FileID
+	}
+	if sent.Animation != nil {
+		return sent.Animation.FileID
+	}
+	if sent.Document != nil {
+		return sent.Document.FileID
+	}
+	if len(sent.Photo) > 0 {
+		return sent.Photo[len(sent.Photo)-1].FileID
 	}
 	return ""
 }
