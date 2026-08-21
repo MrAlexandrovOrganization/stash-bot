@@ -133,6 +133,11 @@ func sendMediaGroupItems(b *Bot, chatID int64, items []*stash.Item) []int {
 // Returns the sent message ID (0 on failure).
 func sendSingleItem(b *Bot, chatID int64, it *stash.Item) int {
 	// Fast path: already cached in Telegram.
+	if fid, ok := b.lookupFileID(it.ID); ok {
+		slog.Info("sendSingleItem: cached", "id", it.ID)
+		it.TelegramFileID = &fid
+		return sendSingleFromCache(b, chatID, it, "")
+	}
 	if it.TelegramFileID != nil && *it.TelegramFileID != "" {
 		slog.Info("sendSingleItem: cached", "id", it.ID)
 		return sendSingleFromCache(b, chatID, it, "")
@@ -157,7 +162,12 @@ func sendFile(b *Bot, chatID int64, item *stash.Item) {
 	ctx := context.Background()
 	caption := sanitizeUTF8(item.Description)
 
-	// Fast path: Telegram file_id already persisted in stash.
+	// Fast path: Telegram file_id already cached/persisted.
+	if fid, ok := b.lookupFileID(item.ID); ok {
+		slog.Info("sendFile: using cached tg file_id", "id", item.ID)
+		sendByTgFileID(b, chatID, fid, item.Type, caption)
+		return
+	}
 	if item.TelegramFileID != nil && *item.TelegramFileID != "" {
 		slog.Info("sendFile: using cached tg file_id", "id", item.ID)
 		sendByTgFileID(b, chatID, *item.TelegramFileID, item.Type, caption)
@@ -192,6 +202,11 @@ func sendFile(b *Bot, chatID int64, item *stash.Item) {
 // Returns (input, isNew, error) where isNew=true means file_id must be cached after send.
 // No caption is set here — the page text is applied to the last message after the group is sent.
 func prepareMediaInput(b *Bot, it *stash.Item) (telego.InputMedia, bool, error) {
+	if fid, ok := b.lookupFileID(it.ID); ok {
+		slog.Info("prepareMediaInput: cached", "id", it.ID)
+		inp := buildGroupInput(it.Type, tu.FileFromID(fid))
+		return inp, false, nil
+	}
 	if it.TelegramFileID != nil && *it.TelegramFileID != "" {
 		slog.Info("prepareMediaInput: cached", "id", it.ID)
 		inp := buildGroupInput(it.Type, tu.FileFromID(*it.TelegramFileID))
@@ -378,10 +393,12 @@ func extractSentFileID(mediaType stash.MediaType, sent telego.Message) string {
 	return ""
 }
 
-// persistTgFileID saves the Telegram file_id into the item (for in-session reuse)
-// and asynchronously persists it to stash so it survives bot restarts.
+// persistTgFileID saves the Telegram file_id into the item (for in-session reuse),
+// into the durable Bot cache, and asynchronously persists it to stash so it
+// survives bot restarts and sess.Items being reset.
 func persistTgFileID(b *Bot, item *stash.Item, tgFileID string) {
 	item.TelegramFileID = &tgFileID
+	b.cacheFileID(item.ID, tgFileID)
 	go func() {
 		if _, err := b.stash.Update(context.Background(), item.ID, stash.UpdateMeta{TelegramFileID: &tgFileID}); err != nil {
 			slog.Error("persistTgFileID: stash update failed", "id", item.ID, "error", err)

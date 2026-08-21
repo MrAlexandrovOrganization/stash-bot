@@ -60,6 +60,13 @@ func loadStorageAndShow(b *Bot, chatID int64, sess *Session, reload bool) {
 		})
 		slog.Info("storage loaded", "count", len(items))
 		sess.Items = items
+		// Seed the durable file_id cache from whatever the backend already has,
+		// so a previously persisted file_id survives sess.Items being reset.
+		for _, it := range items {
+			if it.TelegramFileID != nil && *it.TelegramFileID != "" {
+				b.cacheFileID(it.ID, *it.TelegramFileID)
+			}
+		}
 		sess.CurrentPage = 0
 	} else {
 		slog.Info("storage: using cached items", "count", len(sess.Items))

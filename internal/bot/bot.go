@@ -16,6 +16,23 @@ type Bot struct {
 	rootID    int64
 	sessions  sync.Map // int64 (userID) → *Session
 	fileCache sync.Map // string (item ID) → []byte (prefetched raw bytes)
+	fileIDCache sync.Map // string (item ID) → string (Telegram file_id)
+}
+
+// cacheFileID records a known Telegram file_id for an item so it can later be
+// re-sent instantly by file_id instead of re-downloading from the backend.
+func (b *Bot) cacheFileID(itemID, tgFileID string) {
+	b.fileIDCache.Store(itemID, tgFileID)
+}
+
+// lookupFileID returns a cached Telegram file_id for an item, if known.
+func (b *Bot) lookupFileID(itemID string) (string, bool) {
+	v, ok := b.fileIDCache.Load(itemID)
+	if !ok {
+		return "", false
+	}
+	fid, ok := v.(string)
+	return fid, ok && fid != ""
 }
 
 func New(token string, rootID int64, stashClient *stash.Client, telegramAPIURL string) (*Bot, error) {
