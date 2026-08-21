@@ -18,8 +18,12 @@ type Bot struct {
 	fileCache sync.Map // string (item ID) → []byte (prefetched raw bytes)
 }
 
-func New(token string, rootID int64, stashClient *stash.Client) (*Bot, error) {
-	api, err := telego.NewBot(token)
+func New(token string, rootID int64, stashClient *stash.Client, telegramAPIURL string) (*Bot, error) {
+	opts := []telego.BotOption{}
+	if telegramAPIURL != "" {
+		opts = append(opts, telego.WithAPIServer(telegramAPIURL))
+	}
+	api, err := telego.NewBot(token, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("telegram bot: %w", err)
 	}

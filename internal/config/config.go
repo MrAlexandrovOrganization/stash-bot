@@ -4,12 +4,17 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 )
 
 type Config struct {
 	BotToken string
 	RootID   int64
 	StashURL string
+
+	// TelegramAPIURL is the base URL of a local Telegram Bot API server.
+	// Empty means the default https://api.telegram.org.
+	TelegramAPIURL string
 }
 
 func Load() (*Config, error) {
@@ -33,8 +38,9 @@ func Load() (*Config, error) {
 	}
 
 	return &Config{
-		BotToken: token,
-		RootID:   rootID,
-		StashURL: stashURL,
+		BotToken:       token,
+		RootID:         rootID,
+		StashURL:       stashURL,
+		TelegramAPIURL: strings.TrimRight(os.Getenv("TELEGRAM_LOCAL_API_URL"), "/"),
 	}, nil
 }

@@ -6,9 +6,11 @@ services:
       BOT_TOKEN: "${BOT_TOKEN}"
       ROOT_ID: "${ROOT_ID}"
       STASH_URL: "${STASH_URL:-http://stash:8080}"
+      TELEGRAM_LOCAL_API_URL: "${TELEGRAM_LOCAL_API_URL:-http://telegram-bot-api:8081}"
     networks:
       - stash-bot-net
       - stash-api-net
+      - telegram-net
     deploy:
       resources:
         limits:
@@ -20,3 +22,6 @@ networks:
   stash-api-net:
     external: true
     name: stash-api-net
+  telegram-net:
+    external: true
+    name: telegram-net

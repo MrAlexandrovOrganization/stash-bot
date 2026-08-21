@@ -18,7 +18,7 @@ func main() {
 
 	stashClient := stash.NewClient(cfg.StashURL)
 
-	b, err := bot.New(cfg.BotToken, cfg.RootID, stashClient)
+	b, err := bot.New(cfg.BotToken, cfg.RootID, stashClient, cfg.TelegramAPIURL)
 	if err != nil {
 		slog.Error("bot init", "error", err)
 		os.Exit(1)
