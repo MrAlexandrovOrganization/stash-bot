@@ -10,18 +10,40 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
+)
+
+const (
+	// defaultTimeout bounds metadata operations (search, get, delete, update).
+	defaultTimeout = 30 * time.Second
+	// fileTimeout bounds bulk transfers (upload/download of the media itself).
+	fileTimeout = 5 * time.Minute
 )
 
 type Client struct {
-	baseURL string
-	http    *http.Client
+	baseURL     string
+	http        *http.Client
+	timeout     time.Duration
+	fileTimeout time.Duration
 }
 
 func NewClient(baseURL string) *Client {
 	return &Client{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		http:    &http.Client{},
+		baseURL:     strings.TrimRight(baseURL, "/"),
+		http:        &http.Client{},
+		timeout:     defaultTimeout,
+		fileTimeout: fileTimeout,
 	}
+}
+
+// withTimeout derives a deadline-bounded context from ctx. If ctx already has a
+// deadline (or is cancelled) it is reused unchanged, otherwise a new timeout is
+// applied so a slow/hanging backend cannot block the bot forever.
+func (c *Client) withTimeout(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, d)
 }
 
 func (c *Client) Upload(ctx context.Context, r io.Reader, fileName, contentType string, size int64, meta UploadMeta) (*Item, error) {
@@ -55,6 +77,9 @@ func (c *Client) Upload(ctx context.Context, r io.Reader, fileName, contentType 
 		mw.Close()
 	}()
 
+	ctx, cancel := c.withTimeout(ctx, c.fileTimeout)
+	defer cancel()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/items", pr)
 	if err != nil {
 		return nil, err
@@ -72,6 +97,9 @@ func (c *Client) Search(ctx context.Context, q SearchQuery) ([]*Item, error) {
 	if len(q.Tags) > 0 {
 		params.Set("tags", strings.Join(q.Tags, ","))
 	}
+
+	ctx, cancel := c.withTimeout(ctx, c.timeout)
+	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/items?"+params.Encode(), nil)
 	if err != nil {
@@ -93,6 +121,9 @@ func (c *Client) Search(ctx context.Context, q SearchQuery) ([]*Item, error) {
 }
 
 func (c *Client) Get(ctx context.Context, id string) (*Item, error) {
+	ctx, cancel := c.withTimeout(ctx, c.timeout)
+	defer cancel()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/items/"+id, nil)
 	if err != nil {
 		return nil, err
@@ -101,6 +132,9 @@ func (c *Client) Get(ctx context.Context, id string) (*Item, error) {
 }
 
 func (c *Client) GetFile(ctx context.Context, id string) (io.ReadCloser, *Item, error) {
+	ctx, cancel := c.withTimeout(ctx, c.fileTimeout)
+	defer cancel()
+
 	item, err := c.Get(ctx, id)
 	if err != nil {
 		return nil, nil, err
@@ -122,6 +156,9 @@ func (c *Client) GetFile(ctx context.Context, id string) (io.ReadCloser, *Item, 
 }
 
 func (c *Client) Delete(ctx context.Context, id string) error {
+	ctx, cancel := c.withTimeout(ctx, c.timeout)
+	defer cancel()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.baseURL+"/items/"+id, nil)
 	if err != nil {
 		return err
@@ -138,6 +175,9 @@ func (c *Client) Delete(ctx context.Context, id string) error {
 }
 
 func (c *Client) Update(ctx context.Context, id string, meta UpdateMeta) (*Item, error) {
+	ctx, cancel := c.withTimeout(ctx, c.timeout)
+	defer cancel()
+
 	body, err := json.Marshal(meta)
 	if err != nil {
 		return nil, err

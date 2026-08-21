@@ -24,6 +24,7 @@ func storagePageKeyboard(page, totalPages int) *telego.InlineKeyboardMarkup {
 	actionRow := tu.InlineKeyboardRow(
 		tu.InlineKeyboardButton("✅ Выбрать").WithCallbackData("ssel"),
 		tu.InlineKeyboardButton("🔍 Поиск").WithCallbackData("search"),
+		tu.InlineKeyboardButton("🔄").WithCallbackData("refresh"),
 		tu.InlineKeyboardButton("🏠 Меню").WithCallbackData("menu"),
 	)
 

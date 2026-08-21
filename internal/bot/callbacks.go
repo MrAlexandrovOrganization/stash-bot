@@ -16,6 +16,7 @@ var callbackHandlers = map[string]func(context.Context, *Bot, CallbackContext){
 	"noop":    handleNoop,
 	"menu":    handleMenu,
 	"storage": handleStorage,
+	"refresh": handleRefresh,
 	"search":  handleSearch,
 	"sp":      handleStoragePage,
 	"ssel":    handleSelectMode,
@@ -46,6 +47,15 @@ func handleMenu(ctx context.Context, b *Bot, cc CallbackContext) {
 
 func handleStorage(ctx context.Context, b *Bot, cc CallbackContext) {
 	slog.Info("storage callback", "data", cc.data)
+	cc.session.Pending = ""
+	// Reuse the in-session item list when available (the just-uploaded item
+	// invalidates it via sess.Items = nil), so repeated opens don't refetch
+	// and re-upload everything. Use the explicit "refresh" button to force a reload.
+	loadStorageAndShow(b, cc.chatID, cc.session, cc.session.Items == nil)
+}
+
+func handleRefresh(ctx context.Context, b *Bot, cc CallbackContext) {
+	slog.Info("refresh callback", "data", cc.data)
 	cc.session.Pending = ""
 	loadStorageAndShow(b, cc.chatID, cc.session, true)
 }
