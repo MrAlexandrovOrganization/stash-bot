@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net/textproto"
 	"net/http"
 	"net/url"
 	"strings"
@@ -53,7 +54,15 @@ func (c *Client) Upload(ctx context.Context, r io.Reader, fileName, contentType 
 	go func() {
 		defer pw.Close()
 
-		fw, err := mw.CreateFormFile("file", fileName)
+		ct := contentType
+		if ct == "" {
+			ct = "application/octet-stream"
+		}
+		partHeader := make(textproto.MIMEHeader)
+		partHeader.Set("Content-Disposition",
+			fmt.Sprintf(`form-data; name="file"; filename="%s"`, fileName))
+		partHeader.Set("Content-Type", ct)
+		fw, err := mw.CreatePart(partHeader)
 		if err != nil {
 			pw.CloseWithError(err)
 			return
