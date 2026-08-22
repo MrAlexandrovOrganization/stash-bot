@@ -5,9 +5,12 @@ BINARY = bot
 build:
 	go build -o $(BINARY) ./cmd/bot
 
+# The bot stack owns ONLY the "stash-bot" service. It must never start the
+# stash backend — that is deployed separately by the stash repo's own CI.
+# Targeting "stash-bot" explicitly guarantees the backend is never launched here.
 .PHONY: up
 up:
-	$(DOCKER_COMPOSE) up -d --build
+	$(DOCKER_COMPOSE) up -d --build stash-bot
 
 .PHONY: down
 down:
@@ -15,11 +18,11 @@ down:
 
 .PHONY: logs
 logs:
-	$(DOCKER_COMPOSE) logs -f
+	$(DOCKER_COMPOSE) logs -f stash-bot
 
 .PHONY: deploy
 deploy:
-	$(DOCKER_COMPOSE) up -d --build --no-cache
+	$(DOCKER_COMPOSE) up -d --build --no-cache stash-bot
 
 .PHONY: restart
 restart:
