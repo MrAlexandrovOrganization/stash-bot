@@ -7,6 +7,10 @@ services:
       ROOT_ID: "${ROOT_ID}"
       STASH_URL: "${STASH_URL:-http://stash:8080}"
       TELEGRAM_LOCAL_API_URL: "${TELEGRAM_LOCAL_API_URL:-http://telegram-bot-api:8081}"
+    volumes:
+      # Shared volume from the local Bot API server: lets the bot read
+      # downloaded files directly from disk (GetFile returns absolute paths).
+      - telegram-bot-api-data:/var/lib/telegram-bot-api:ro
     networks:
       - stash-bot-net
       - stash-api-net
@@ -25,3 +29,8 @@ networks:
   telegram-net:
     external: true
     name: telegram-net
+
+volumes:
+  telegram-bot-api-data:
+    external: true
+    name: telegram-bot-api-data

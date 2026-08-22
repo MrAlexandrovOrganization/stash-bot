@@ -1,10 +1,13 @@
 package bot
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 
 	"stash-bot/internal/stash"
@@ -33,36 +36,63 @@ func (b *Bot) handleUpload(msg *telego.Message, mediaType stash.MediaType) {
 		return
 	}
 
-	filePath := file.FilePath
+	var data []byte
+	var size int64
+
 	if b.telegramAPIURL != "" {
-		// With a local Bot API server, GetFile returns the absolute path of
-		// the file on the server's filesystem, of the form
-		// <download_dir>/<token>/<rest>. The download URL must be the
-		// relative <rest> part; otherwise FileDownloadURL builds a broken
-		// URL and Telegram returns 404.
-		if i := strings.Index(filePath, b.token); i >= 0 {
-			filePath = strings.TrimPrefix(filePath[i+len(b.token):], "/")
+		// The local Bot API server stores files on a shared volume
+		// (telegram-bot-api-data, mounted read-only at
+		// /var/lib/telegram-bot-api). GetFile returns the absolute path on
+		// that volume, so read it directly from disk — no URL guessing, no
+		// 404s. Fall back to HTTP if the mount is unavailable.
+		if d, rerr := os.ReadFile(file.FilePath); rerr == nil {
+			data = d
+			size = int64(len(d))
+		} else {
+			slog.Warn("upload: direct file read failed, falling back to HTTP",
+				"path", file.FilePath, "error", rerr)
 		}
 	}
-	fileURL := b.api.FileDownloadURL(filePath)
-	slog.Info("upload: telegram file url", "url", fileURL)
-	resp, err := http.Get(fileURL) //nolint:noctx
-	if err != nil {
-		slog.Error("upload: http get failed", "error", err)
-		send(b, msg.Chat.ID, "Не удалось скачать файл.")
-		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		// Telegram (or the local Bot API server) returned an error body;
-		// without this check that body would be stored as the "image".
-		slog.Error("upload: telegram download status", "status", resp.StatusCode, "file_url", fileURL)
-		send(b, msg.Chat.ID, "Не удалось скачать файл из Telegram.")
-		return
-	}
-	slog.Info("upload: uploading to stash", "file_name", fileName, "size", resp.ContentLength)
 
-	item, err := b.stash.Upload(ctx, resp.Body, fileName, contentType, resp.ContentLength, stash.UploadMeta{
+	if data == nil {
+		filePath := file.FilePath
+		if b.telegramAPIURL != "" {
+			// Local Bot API server: the download URL path must be relative
+			// to <download_dir>/<token>, i.e. the <rest> part of the
+			// absolute path returned by GetFile.
+			if i := strings.Index(filePath, b.token); i >= 0 {
+				filePath = strings.TrimPrefix(filePath[i+len(b.token):], "/")
+			}
+		}
+		fileURL := b.api.FileDownloadURL(filePath)
+		slog.Info("upload: telegram file url", "url", fileURL)
+		resp, err := http.Get(fileURL) //nolint:noctx
+		if err != nil {
+			slog.Error("upload: http get failed", "error", err)
+			send(b, msg.Chat.ID, "Не удалось скачать файл.")
+			return
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			// Telegram (or the local Bot API server) returned an error body;
+			// without this check that body would be stored as the "image".
+			slog.Error("upload: telegram download status", "status", resp.StatusCode, "file_url", fileURL)
+			send(b, msg.Chat.ID, "Не удалось скачать файл из Telegram.")
+			return
+		}
+		d, rerr := io.ReadAll(resp.Body)
+		if rerr != nil {
+			slog.Error("upload: reading body", "error", rerr)
+			send(b, msg.Chat.ID, "Не удалось скачать файл.")
+			return
+		}
+		data = d
+		size = int64(len(d))
+	}
+
+	slog.Info("upload: uploading to stash", "file_name", fileName, "size", size)
+
+	item, err := b.stash.Upload(ctx, bytes.NewReader(data), fileName, contentType, size, stash.UploadMeta{
 		Description:     description,
 		Tags:            tags,
 		Source:          forwardSource(msg),
