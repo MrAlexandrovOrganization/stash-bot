@@ -11,12 +11,14 @@ import (
 )
 
 type Bot struct {
-	api         *telego.Bot
-	stash       *stash.Client
-	rootID      int64
-	sessions    sync.Map // int64 (userID) → *Session
-	fileCache   sync.Map // string (item ID) → []byte (prefetched raw bytes)
-	fileIDCache sync.Map // string (item ID) → string (Telegram file_id)
+	api            *telego.Bot
+	stash          *stash.Client
+	rootID         int64
+	token          string
+	telegramAPIURL string
+	sessions       sync.Map // int64 (userID) → *Session
+	fileCache      sync.Map // string (item ID) → []byte (prefetched raw bytes)
+	fileIDCache    sync.Map // string (item ID) → string (Telegram file_id)
 }
 
 // cacheFileID records a known Telegram file_id for an item so it can later be
@@ -45,9 +47,11 @@ func New(token string, rootID int64, stashClient *stash.Client, telegramAPIURL s
 		return nil, fmt.Errorf("telegram bot: %w", err)
 	}
 	return &Bot{
-		api:    api,
-		stash:  stashClient,
-		rootID: rootID,
+		api:            api,
+		stash:          stashClient,
+		rootID:         rootID,
+		token:          token,
+		telegramAPIURL: telegramAPIURL,
 	}, nil
 }
 
