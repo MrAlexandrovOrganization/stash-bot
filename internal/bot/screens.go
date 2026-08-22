@@ -34,18 +34,25 @@ func showMainMenu(b *Bot, chatID int64, sess *Session) {
 }
 
 // deleteMediaMessages deletes all previously sent page media messages.
+// Done one-by-one so a single failure (e.g. a message older than 48h or already
+// removed) doesn't abort the rest and leak orphaned media into the chat. IDs
+// that couldn't be deleted are kept so a later refresh can retry them.
 func deleteMediaMessages(b *Bot, chatID int64, sess *Session) {
 	if len(sess.MediaMsgIDs) == 0 {
 		return
 	}
 	slog.Info("deleteMediaMessages", "count", len(sess.MediaMsgIDs))
-	if err := b.api.DeleteMessages(context.Background(), &telego.DeleteMessagesParams{
-		ChatID:     tu.ID(chatID),
-		MessageIDs: sess.MediaMsgIDs,
-	}); err != nil {
-		slog.Error("deleteMediaMessages: failed", "error", err)
+	remaining := make([]int, 0, len(sess.MediaMsgIDs))
+	for _, id := range sess.MediaMsgIDs {
+		if err := b.api.DeleteMessage(context.Background(), &telego.DeleteMessageParams{
+			ChatID:    tu.ID(chatID),
+			MessageID: id,
+		}); err != nil {
+			slog.Error("deleteMediaMessages: failed", "id", id, "error", err)
+			remaining = append(remaining, id)
+		}
 	}
-	sess.MediaMsgIDs = nil
+	sess.MediaMsgIDs = remaining
 }
 
 // loadStorageAndShow loads all items from stash (optionally force-reloading) and shows page 0.
