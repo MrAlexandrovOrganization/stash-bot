@@ -105,6 +105,19 @@ func sendStoragePage(b *Bot, chatID int64, sess *Session, sendFiles bool) {
 	pageItems := sess.Items[start:end]
 	totalPages := (len(sess.Items) + pageSize - 1) / pageSize
 
+	// Diagnostic: report, for each item on the page, where its Telegram file_id
+	// will come from. "DOWNLOAD" means the bot will re-fetch the file from the
+	// backend — i.e. a cache miss that shows up as slow on a phone.
+	for _, it := range pageItems {
+		source := "DOWNLOAD"
+		if fid, ok := b.lookupFileID(it.ID); ok && fid != "" {
+			source = "cache"
+		} else if it.TelegramFileID != nil && *it.TelegramFileID != "" {
+			source = "item"
+		}
+		slog.Info("storage page item", "id", it.ID, "type", it.Type, "file_id_source", source)
+	}
+
 	slog.Info("sendStoragePage", "page", sess.CurrentPage, "total_pages", totalPages, "items_on_page", len(pageItems), "send_files", sendFiles)
 
 	text := buildStoragePageText(sess, pageItems, start, totalPages)

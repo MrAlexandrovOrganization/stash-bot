@@ -121,6 +121,13 @@ func sendMediaGroupItems(b *Bot, chatID int64, items []*stash.Item) []int {
 		slog.Warn("sendMediaGroupItems: sent/received count mismatch — some items may not be cached",
 			"input_count", len(media), "sent_count", len(sentMsgs))
 	}
+	for i, m := range sentMsgs {
+		slog.Info("media group result", "index", i,
+			"has_photo", len(m.Photo) > 0,
+			"has_video", m.Video != nil,
+			"has_animation", m.Animation != nil,
+			"has_document", m.Document != nil)
+	}
 
 	cacheMediaGroupFileIDs(b, slots, sentMsgs)
 
@@ -245,6 +252,7 @@ func cacheMediaGroupFileIDs(b *Bot, slots []mediaSlot, sentMsgs []telego.Message
 				"id", slot.item.ID, "type", slot.item.Type, "sent_count", len(sentMsgs))
 			continue
 		}
+		slog.Info("cacheMediaGroupFileIDs: cached file_id", "id", slot.item.ID, "type", slot.item.Type)
 		persistTgFileID(b, slot.item, tgID)
 	}
 }
