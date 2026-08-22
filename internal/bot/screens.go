@@ -19,10 +19,10 @@ const pageSize = 10
 // ── Screens ───────────────────────────────────────────────────────────────────
 
 func showMainMenu(b *Bot, chatID int64, sess *Session) {
-	// Note: we deliberately keep the media messages (sess.MediaMsgIDs) in the
-	// chat instead of deleting them, so returning to storage can reuse them
-	// without re-sending. A reload (handled in loadStorageAndShow) still
-	// re-sends and clears them when needed.
+	// Hide the currently displayed storage media when returning to the menu,
+	// so the gallery doesn't linger in the chat. The next storage open re-sends
+	// it (instantly, via the cached Telegram file_id).
+	deleteMediaMessages(b, chatID, sess)
 	text := "👋 Привет! Я твоё личное хранилище медиа.\n\nЧтобы сохранить файл — просто отправь его сюда.\nЧтобы найти — напиши текст или теги."
 	kb := tu.InlineKeyboard(
 		tu.InlineKeyboardRow(
@@ -33,26 +33,21 @@ func showMainMenu(b *Bot, chatID int64, sess *Session) {
 	sess.LastMsgID = editOrSendHTML(b, chatID, sess.LastMsgID, text, kb)
 }
 
-// deleteMediaMessages deletes all previously sent page media messages.
-// Done one-by-one so a single failure (e.g. a message older than 48h or already
-// removed) doesn't abort the rest and leak orphaned media into the chat. IDs
-// that couldn't be deleted are kept so a later refresh can retry them.
+// deleteMediaMessages deletes all previously sent page media messages in one
+// batch. Bundled deletion is intentional: deleting one-by-one makes the chat
+// flicker as each message disappears individually.
 func deleteMediaMessages(b *Bot, chatID int64, sess *Session) {
 	if len(sess.MediaMsgIDs) == 0 {
 		return
 	}
 	slog.Info("deleteMediaMessages", "count", len(sess.MediaMsgIDs))
-	remaining := make([]int, 0, len(sess.MediaMsgIDs))
-	for _, id := range sess.MediaMsgIDs {
-		if err := b.api.DeleteMessage(context.Background(), &telego.DeleteMessageParams{
-			ChatID:    tu.ID(chatID),
-			MessageID: id,
-		}); err != nil {
-			slog.Error("deleteMediaMessages: failed", "id", id, "error", err)
-			remaining = append(remaining, id)
-		}
+	if err := b.api.DeleteMessages(context.Background(), &telego.DeleteMessagesParams{
+		ChatID:     tu.ID(chatID),
+		MessageIDs: sess.MediaMsgIDs,
+	}); err != nil {
+		slog.Error("deleteMediaMessages: failed", "error", err)
 	}
-	sess.MediaMsgIDs = remaining
+	sess.MediaMsgIDs = nil
 }
 
 // loadStorageAndShow loads all items from stash (optionally force-reloading) and shows page 0.
