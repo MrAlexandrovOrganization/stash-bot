@@ -21,6 +21,7 @@
 - Falls back to `message.Text` if no caption
 - Works for both direct uploads and forwarded messages
 - Removes hashtags from description while keeping them as tags
+- Displays AI-generated (neuro) descriptions from the stash backend
 
 ### 3. Fixed Search Functionality
 - Supports text search
