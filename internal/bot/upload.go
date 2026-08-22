@@ -36,12 +36,12 @@ func (b *Bot) handleUpload(msg *telego.Message, mediaType stash.MediaType) {
 	filePath := file.FilePath
 	if b.telegramAPIURL != "" {
 		// With a local Bot API server, GetFile returns the absolute path of
-		// the file on the server's filesystem. The download URL must be
-		// relative to the server's download_dir (i.e. start from the bot
-		// token directory); otherwise FileDownloadURL builds a broken
-		// ".../file/bot<token>//var/lib/..." URL and Telegram returns 404.
+		// the file on the server's filesystem, of the form
+		// <download_dir>/<token>/<rest>. The download URL must be the
+		// relative <rest> part; otherwise FileDownloadURL builds a broken
+		// URL and Telegram returns 404.
 		if i := strings.Index(filePath, b.token); i >= 0 {
-			filePath = filePath[i:]
+			filePath = strings.TrimPrefix(filePath[i+len(b.token):], "/")
 		}
 	}
 	fileURL := b.api.FileDownloadURL(filePath)
