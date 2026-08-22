@@ -11,11 +11,11 @@ import (
 )
 
 type Bot struct {
-	api       *telego.Bot
-	stash     *stash.Client
-	rootID    int64
-	sessions  sync.Map // int64 (userID) → *Session
-	fileCache sync.Map // string (item ID) → []byte (prefetched raw bytes)
+	api         *telego.Bot
+	stash       *stash.Client
+	rootID      int64
+	sessions    sync.Map // int64 (userID) → *Session
+	fileCache   sync.Map // string (item ID) → []byte (prefetched raw bytes)
 	fileIDCache sync.Map // string (item ID) → string (Telegram file_id)
 }
 
