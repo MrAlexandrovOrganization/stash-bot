@@ -41,6 +41,13 @@ func (b *Bot) handleUpload(msg *telego.Message, mediaType stash.MediaType) {
 		return
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		// Telegram (or the local Bot API server) returned an error body;
+		// without this check that body would be stored as the "image".
+		slog.Error("upload: telegram download status", "status", resp.StatusCode, "file_url", fileURL)
+		send(b, msg.Chat.ID, "Не удалось скачать файл из Telegram.")
+		return
+	}
 	slog.Info("upload: uploading to stash", "file_name", fileName, "size", resp.ContentLength)
 
 	item, err := b.stash.Upload(ctx, resp.Body, fileName, contentType, resp.ContentLength, stash.UploadMeta{
