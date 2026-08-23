@@ -37,6 +37,7 @@ type UploadMeta struct {
 	Tags            []string
 	Source          string
 	OriginalCaption string
+	FileUniqueID    string
 }
 
 type UpdateMeta struct {

@@ -83,6 +83,9 @@ func (c *Client) Upload(ctx context.Context, r io.Reader, fileName, contentType 
 		if meta.OriginalCaption != "" {
 			_ = mw.WriteField("original_caption", meta.OriginalCaption)
 		}
+		if meta.FileUniqueID != "" {
+			_ = mw.WriteField("file_unique_id", meta.FileUniqueID)
+		}
 		mw.Close()
 	}()
 

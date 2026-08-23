@@ -20,7 +20,7 @@ import (
 func (b *Bot) handleUpload(msg *telego.Message, mediaType stash.MediaType) {
 	ctx := context.Background()
 
-	fileID, fileName, contentType := extractFileInfo(msg, mediaType)
+	fileID, fileName, contentType, fileUniqueID := extractFileInfo(msg, mediaType)
 	if fileID == "" {
 		send(b, msg.Chat.ID, "Не удалось получить файл.")
 		return
@@ -97,6 +97,7 @@ func (b *Bot) handleUpload(msg *telego.Message, mediaType stash.MediaType) {
 		Tags:            tags,
 		Source:          forwardSource(msg),
 		OriginalCaption: msg.Caption,
+		FileUniqueID:    fileUniqueID,
 	})
 	if err != nil {
 		slog.Error("upload: stash upload failed", "error", err)
@@ -143,14 +144,14 @@ func forwardSource(msg *telego.Message) string {
 	return ""
 }
 
-func extractFileInfo(msg *telego.Message, mediaType stash.MediaType) (fileID, fileName, contentType string) {
+func extractFileInfo(msg *telego.Message, mediaType stash.MediaType) (fileID, fileName, contentType, fileUniqueID string) {
 	switch mediaType {
 	case stash.MediaTypeImage:
 		if len(msg.Photo) == 0 {
-			return "", "", ""
+			return "", "", "", ""
 		}
 		p := msg.Photo[len(msg.Photo)-1]
-		return p.FileID, fmt.Sprintf("photo_%s.jpg", p.FileUniqueID), "image/jpeg"
+		return p.FileID, fmt.Sprintf("photo_%s.jpg", p.FileUniqueID), "image/jpeg", p.FileUniqueID
 	case stash.MediaTypeVideo:
 		v := msg.Video
 		name := v.FileName
@@ -161,21 +162,21 @@ func extractFileInfo(msg *telego.Message, mediaType stash.MediaType) (fileID, fi
 		if ct == "" {
 			ct = "video/mp4"
 		}
-		return v.FileID, name, ct
+		return v.FileID, name, ct, v.FileUniqueID
 	case stash.MediaTypeGIF:
 		a := msg.Animation
 		name := a.FileName
 		if name == "" {
 			name = fmt.Sprintf("animation_%s.mp4", a.FileUniqueID)
 		}
-		return a.FileID, name, "video/mp4"
+		return a.FileID, name, "video/mp4", a.FileUniqueID
 	case stash.MediaTypeDocument:
 		d := msg.Document
 		ct := d.MimeType
 		if ct == "" {
 			ct = "application/octet-stream"
 		}
-		return d.FileID, d.FileName, ct
+		return d.FileID, d.FileName, ct, d.FileUniqueID
 	}
-	return "", "", ""
+	return "", "", "", ""
 }
