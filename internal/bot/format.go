@@ -32,11 +32,17 @@ var itemFields = []struct {
 		if it.Transcript != nil {
 			return *it.Transcript
 		}
+		if it.TranscriptJobID != nil {
+			return "⏳ Генерируется…"
+		}
 		return ""
 	}},
 	{"🤖 Нейроописание", func(it *stash.Item) string {
 		if it.AIDescription != nil {
 			return *it.AIDescription
+		}
+		if it.AIDescriptionError != nil && *it.AIDescriptionError != "" {
+			return "⚠️ " + *it.AIDescriptionError
 		}
 		return ""
 	}},

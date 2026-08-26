@@ -143,28 +143,45 @@ func (c *Client) Get(ctx context.Context, id string) (*Item, error) {
 	return decodeItem(c.http.Do(req))
 }
 
+// cancelReadCloser ties the request-context cancellation to body closing, so
+// the caller can stream the body AFTER GetFile has returned (a plain defer
+// cancel() would kill the transfer mid-read).
+type cancelReadCloser struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (c *cancelReadCloser) Close() error {
+	err := c.ReadCloser.Close()
+	c.cancel()
+	return err
+}
+
 func (c *Client) GetFile(ctx context.Context, id string) (io.ReadCloser, *Item, error) {
 	ctx, cancel := c.withTimeout(ctx, c.fileTimeout)
-	defer cancel()
 
 	item, err := c.Get(ctx, id)
 	if err != nil {
+		cancel()
 		return nil, nil, err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/items/"+id+"/file", nil)
 	if err != nil {
+		cancel()
 		return nil, nil, err
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
+		cancel()
 		return nil, nil, fmt.Errorf("get file: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
+		cancel()
 		return nil, nil, fmt.Errorf("get file: status %d", resp.StatusCode)
 	}
-	return resp.Body, item, nil
+	return &cancelReadCloser{ReadCloser: resp.Body, cancel: cancel}, item, nil
 }
 
 func (c *Client) Delete(ctx context.Context, id string) error {
@@ -199,6 +216,20 @@ func (c *Client) Update(ctx context.Context, id string, meta UpdateMeta) (*Item,
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	return decodeItem(c.http.Do(req))
+}
+
+// Describe asks the backend to (re)generate the AI description for one item.
+// Generation runs asynchronously on the backend; poll Get until the item has
+// either AIDescription or AIDescriptionError set.
+func (c *Client) Describe(ctx context.Context, id string) (*Item, error) {
+	ctx, cancel := c.withTimeout(ctx, c.timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/items/"+id+"/describe", nil)
+	if err != nil {
+		return nil, err
+	}
 	return decodeItem(c.http.Do(req))
 }
 

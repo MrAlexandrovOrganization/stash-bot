@@ -6,6 +6,7 @@ import (
 
 	"stash-bot/internal/bot"
 	"stash-bot/internal/config"
+	"stash-bot/internal/logx"
 	"stash-bot/internal/stash"
 )
 
@@ -16,6 +17,7 @@ func main() {
 		os.Exit(1)
 	}
 
+	logx.Setup("stash-bot", cfg.BotToken)
 	stashClient := stash.NewClient(cfg.StashURL)
 
 	b, err := bot.New(cfg.BotToken, cfg.RootID, stashClient, cfg.TelegramAPIURL)

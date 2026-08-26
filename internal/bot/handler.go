@@ -32,10 +32,6 @@ func (b *Bot) handleTextInput(msg *telego.Message) {
 		tags := parseTags(text)
 		updateCurrentItem(b, ctx, msg.Chat.ID, sess, stash.UpdateMeta{Tags: tags}, "Ошибка при обновлении тегов.")
 
-	case "tr":
-		sess.Pending = ""
-		updateCurrentItem(b, ctx, msg.Chat.ID, sess, stash.UpdateMeta{Transcript: &text}, "Ошибка при обновлении расшифровки.")
-
 	default:
 		// No pending state: treat message as a search query.
 		doSearch(b, msg.Chat.ID, sess, text)

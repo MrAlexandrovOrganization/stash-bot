@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mymmrac/telego"
 	tu "github.com/mymmrac/telego/telegoutil"
@@ -22,6 +23,7 @@ var callbackHandlers = map[string]func(context.Context, *Bot, CallbackContext){
 	"ssel":    handleSelectMode,
 	"si":      handleSelectItem,
 	"edit":    handleEdit,
+	"aidesc":  handleAIDescribe,
 	"file":    handleFile,
 	"del":     handleDelete,
 	"back":    handleBack,
@@ -124,6 +126,71 @@ func handleEdit(ctx context.Context, b *Bot, cc CallbackContext) {
 	slog.Info("start field edit", "field", cc.data)
 	cc.session.Pending = cc.data
 	cc.session.LastMsgID = editOrSendHTML(b, cc.chatID, cc.session.LastMsgID, prompt, cancelKeyboard())
+}
+
+// aiDescriptionPollInterval and aiDescriptionPollTimeout bound the wait for a
+// background AI description to finish after the user presses "Описать".
+const (
+	aiDescriptionPollInterval = 5 * time.Second
+	aiDescriptionPollTimeout  = 5 * time.Minute
+)
+
+// handleAIDescribe triggers (re)generation of the AI description for the
+// current item and polls the backend until the result or an error appears.
+func handleAIDescribe(ctx context.Context, b *Bot, cc CallbackContext) {
+	slog.Info("callback aidesc", "data", cc.data)
+
+	if cc.session.CurrentItem == nil {
+		slog.Warn("callback aidesc: no current item")
+		return
+	}
+	itemID := cc.session.CurrentItem.ID
+	updated, err := b.stash.Describe(ctx, itemID)
+	if err != nil {
+		slog.Error("aidesc: describe failed", "id", itemID, "error", err)
+		send(b, cc.chatID, "Не удалось запустить генерацию описания.")
+		return
+	}
+	applyItemUpdate(cc.session, updated)
+	cc.session.LastMsgID = editOrSendHTML(b, cc.chatID, cc.session.LastMsgID,
+		"⏳ Генерирую нейроописание…", itemDetailKeyboard(updated))
+
+	go pollAIDescription(b, cc.chatID, cc.session, itemID)
+}
+
+// pollAIDescription waits until the item gets an AI description or an error,
+// then refreshes the item card.
+func pollAIDescription(b *Bot, chatID int64, sess *Session, itemID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), aiDescriptionPollTimeout)
+	defer cancel()
+
+	ticker := time.NewTicker(aiDescriptionPollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			if sess.CurrentItem != nil && sess.CurrentItem.ID == itemID {
+				sess.LastMsgID = editOrSendHTML(b, chatID, sess.LastMsgID,
+					"⚠️ Нейроописание пока не готово. Обнови карточку позже.", itemDetailKeyboard(sess.CurrentItem))
+			}
+			return
+		case <-ticker.C:
+			item, err := b.stash.Get(ctx, itemID)
+			if err != nil {
+				slog.Error("aidesc: poll get", "id", itemID, "error", err)
+				continue
+			}
+			if item.AIDescription == nil && item.AIDescriptionError == nil {
+				continue // still generating
+			}
+			applyItemUpdate(sess, item)
+			if sess.CurrentItem != nil && sess.CurrentItem.ID == itemID {
+				showItem(b, chatID, sess)
+			}
+			return
+		}
+	}
 }
 
 func handleFile(ctx context.Context, b *Bot, cc CallbackContext) {
@@ -242,16 +309,6 @@ func buildEditPrompt(field string, sess *Session) string {
 				current[i] = "#" + t
 			}
 			prompt += "\n\nТекущие: " + escapeHTML(strings.Join(current, " "))
-		}
-		return prompt
-	case "tr":
-		prompt := "Введи расшифровку:"
-		if it.Transcript != nil && *it.Transcript != "" {
-			t := sanitizeUTF8(*it.Transcript)
-			if len([]rune(t)) > 200 {
-				t = string([]rune(t)[:200]) + "…"
-			}
-			prompt += "\n\nТекущая: " + escapeHTML(t)
 		}
 		return prompt
 	}

@@ -28,6 +28,12 @@ deploy:
 restart:
 	$(DOCKER_COMPOSE) restart stash-bot
 
+# One-shot repair of items whose stored bytes are Telegram error bodies
+# instead of media (see cmd/repair-media). Preview first: DRY_RUN=1 make repair.
+.PHONY: repair
+repair:
+	$(DOCKER_COMPOSE) run --rm --entrypoint /app/repair-media stash-bot
+
 .PHONY: format
 format:
 	@test -z "$$(gofmt -l .)" || (gofmt -l . && exit 1)

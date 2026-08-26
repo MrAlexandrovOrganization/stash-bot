@@ -12,19 +12,22 @@ const (
 )
 
 type Item struct {
-	ID              string    `json:"id"`
-	Type            MediaType `json:"type"`
-	FileName        string    `json:"file_name"`
-	ContentType     string    `json:"content_type"`
-	Size            int64     `json:"size"`
-	Description     string    `json:"description"`
-	Tags            []string  `json:"tags"`
-	Source          string    `json:"source"`
-	OriginalCaption string    `json:"original_caption"`
-	Transcript      *string   `json:"transcript,omitempty"`
-	AIDescription   *string   `json:"ai_description,omitempty"`
-	TelegramFileID  *string   `json:"telegram_file_id,omitempty"`
-	CreatedAt       time.Time `json:"created_at"`
+	ID                 string    `json:"id"`
+	Type               MediaType `json:"type"`
+	FileName           string    `json:"file_name"`
+	ContentType        string    `json:"content_type"`
+	Size               int64     `json:"size"`
+	Description        string    `json:"description"`
+	Tags               []string  `json:"tags"`
+	Source             string    `json:"source"`
+	OriginalCaption    string    `json:"original_caption"`
+	Transcript         *string   `json:"transcript,omitempty"`
+	TranscriptJobID    *string   `json:"transcript_job_id,omitempty"`
+	AIDescription      *string   `json:"ai_description,omitempty"`
+	AIDescriptionError *string   `json:"ai_description_error,omitempty"`
+	TelegramFileID     *string   `json:"telegram_file_id,omitempty"`
+	FileUniqueID       *string   `json:"file_unique_id,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 type SearchQuery struct {
@@ -45,4 +48,5 @@ type UpdateMeta struct {
 	Tags           []string `json:"tags,omitempty"`
 	Transcript     *string  `json:"transcript,omitempty"`
 	TelegramFileID *string  `json:"telegram_file_id,omitempty"`
+	FileUniqueID   *string  `json:"file_unique_id,omitempty"`
 }

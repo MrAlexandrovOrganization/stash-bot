@@ -36,8 +36,13 @@ func itemDetailKeyboard(item *stash.Item) *telego.InlineKeyboardMarkup {
 		tu.InlineKeyboardButton("✏️ Описание").WithCallbackData("edit:desc"),
 		tu.InlineKeyboardButton("🏷 Теги").WithCallbackData("edit:tags"),
 	}
-	if item.Type == stash.MediaTypeVideo {
-		editRow = append(editRow, tu.InlineKeyboardButton("📄 Расшифровка").WithCallbackData("edit:tr"))
+
+	if aiDescribable(item) {
+		label := "🤖 Описать"
+		if item.AIDescription != nil && *item.AIDescription != "" {
+			label = "🤖 Переописать"
+		}
+		editRow = append(editRow, tu.InlineKeyboardButton(label).WithCallbackData("aidesc"))
 	}
 
 	actionRow := tu.InlineKeyboardRow(
@@ -47,6 +52,15 @@ func itemDetailKeyboard(item *stash.Item) *telego.InlineKeyboardMarkup {
 	)
 
 	return tu.InlineKeyboard(editRow, actionRow)
+}
+
+// aiDescribable reports whether the backend vision pipeline handles this type.
+func aiDescribable(item *stash.Item) bool {
+	switch item.Type {
+	case stash.MediaTypeImage, stash.MediaTypeGIF, stash.MediaTypeVideo:
+		return true
+	}
+	return false
 }
 
 func cancelKeyboard() *telego.InlineKeyboardMarkup {
