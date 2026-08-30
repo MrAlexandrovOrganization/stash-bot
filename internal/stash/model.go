@@ -35,6 +35,16 @@ type SearchQuery struct {
 	Tags []string
 }
 
+// SimilarRequest is the input to a hybrid similarity search against the stash
+// backend. At least one of Text, ItemID or ImageBytes should be set.
+type SimilarRequest struct {
+	Text       string // natural-language query
+	ItemID     string // find items visually similar to this existing item
+	ImageBytes []byte // find items visually similar to an uploaded image
+	Limit      int
+	Offset     int
+}
+
 type UploadMeta struct {
 	Description     string
 	Tags            []string

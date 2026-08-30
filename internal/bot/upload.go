@@ -118,6 +118,65 @@ func (b *Bot) handleUpload(msg *telego.Message, mediaType stash.MediaType) {
 	showItem(b, msg.Chat.ID, sess)
 }
 
+// handleSimilarByImage downloads the photo from the sent message and finds
+// visually similar media in stash without saving the photo itself.
+func (b *Bot) handleSimilarByImage(msg *telego.Message) {
+	ctx := context.Background()
+	sess := b.session(msg.From.ID, msg.Chat.ID)
+
+	fileID, _, _, _ := extractFileInfo(msg, stash.MediaTypeImage)
+	if fileID == "" {
+		send(b, msg.Chat.ID, "Не удалось получить картинку.")
+		return
+	}
+	slog.Info("similar by image: downloading", "file_id", fileID)
+
+	data, err := b.downloadFile(ctx, fileID)
+	if err != nil {
+		slog.Error("similar by image: download failed", "error", err)
+		send(b, msg.Chat.ID, "Не удалось скачать картинку.")
+		return
+	}
+	slog.Info("similar by image: querying stash", "size", len(data))
+
+	runSimilar(b, msg.Chat.ID, sess, stash.SimilarRequest{ImageBytes: data, Limit: similarLimit})
+}
+
+// downloadFile fetches a Telegram file by id into memory, preferring the local
+// Bot API shared volume when configured, and falling back to HTTP download.
+func (b *Bot) downloadFile(ctx context.Context, fileID string) ([]byte, error) {
+	file, err := b.api.GetFile(ctx, &telego.GetFileParams{FileID: fileID})
+	if err != nil {
+		return nil, err
+	}
+
+	if b.telegramAPIURL != "" {
+		if d, rerr := os.ReadFile(file.FilePath); rerr == nil {
+			return d, nil
+		} else {
+			slog.Warn("downloadFile: direct read failed, falling back to HTTP",
+				"path", file.FilePath, "error", rerr)
+		}
+	}
+
+	filePath := file.FilePath
+	if b.telegramAPIURL != "" {
+		if i := strings.Index(filePath, b.token); i >= 0 {
+			filePath = strings.TrimPrefix(filePath[i+len(b.token):], "/")
+		}
+	}
+	fileURL := b.api.FileDownloadURL(filePath)
+	resp, err := http.Get(fileURL) //nolint:noctx
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("telegram download status %d", resp.StatusCode)
+	}
+	return io.ReadAll(resp.Body)
+}
+
 // forwardSource returns a human-readable name of the original sender for
 // forwarded messages. Empty for messages sent directly to the bot.
 func forwardSource(msg *telego.Message) string {

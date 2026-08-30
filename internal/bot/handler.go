@@ -23,6 +23,10 @@ func (b *Bot) handleTextInput(msg *telego.Message) {
 		sess.Pending = ""
 		doSearch(b, msg.Chat.ID, sess, text)
 
+	case "simq":
+		sess.Pending = ""
+		runSimilar(b, msg.Chat.ID, sess, stash.SimilarRequest{Text: text, Limit: similarLimit})
+
 	case "desc":
 		sess.Pending = ""
 		updateCurrentItem(b, ctx, msg.Chat.ID, sess, stash.UpdateMeta{Description: &text}, "Ошибка при обновлении описания.")
@@ -103,6 +107,47 @@ func doSearch(b *Bot, chatID int64, sess *Session, query string) {
 			),
 		)
 		sendHTML(b, chatID, "Ничего не найдено.", kb)
+		return
+	}
+
+	sess.Screen = ScreenStorage
+	sess.Back = ScreenMain
+	sess.Items = items
+	sess.CurrentPage = 0
+	sendStoragePage(b, chatID, sess, true)
+}
+
+// runSimilar executes a similarity search, drops the current media from the
+// results (when searching by item) and shows the page.
+func runSimilar(b *Bot, chatID int64, sess *Session, req stash.SimilarRequest) {
+	items, err := b.stash.Similar(context.Background(), req)
+	if err != nil {
+		slog.Error("similar: stash failed", "error", err)
+		send(b, chatID, "Ошибка похожего поиска.")
+		return
+	}
+	slog.Info("similar: got results", "count", len(items))
+
+	// When searching by an existing item, exclude the query item itself.
+	if req.ItemID != "" {
+		filtered := items[:0]
+		for _, it := range items {
+			if it.ID != req.ItemID {
+				filtered = append(filtered, it)
+			}
+		}
+		slog.Info("similar: after self-exclusion", "count", len(filtered))
+		items = filtered
+	}
+
+	if len(items) == 0 {
+		kb := tu.InlineKeyboard(
+			tu.InlineKeyboardRow(
+				tu.InlineKeyboardButton("🔍 Найти ещё").WithCallbackData("search"),
+				tu.InlineKeyboardButton("🏠 Меню").WithCallbackData("menu"),
+			),
+		)
+		sendHTML(b, chatID, "Похожих медиа не найдено.", kb)
 		return
 	}
 

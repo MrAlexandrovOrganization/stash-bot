@@ -47,6 +47,7 @@ func itemDetailKeyboard(item *stash.Item) *telego.InlineKeyboardMarkup {
 
 	actionRow := tu.InlineKeyboardRow(
 		tu.InlineKeyboardButton("📥 Файл").WithCallbackData("file"),
+		tu.InlineKeyboardButton("🔍 Похожие").WithCallbackData("sim"),
 		tu.InlineKeyboardButton("🗑 Удалить").WithCallbackData("del"),
 		tu.InlineKeyboardButton("◀ Назад").WithCallbackData("back"),
 	)

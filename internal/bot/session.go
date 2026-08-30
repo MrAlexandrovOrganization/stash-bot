@@ -25,7 +25,7 @@ type Session struct {
 	// Item currently being viewed or edited.
 	CurrentItem *stash.Item
 
-	// Pending text input. Values: "desc", "tags", "tr", "search"
+	// Pending text input. Values: "desc", "tags", "tr", "search", "simq", "simimg"
 	Pending string
 
 	// LastMsgID is the message ID of the bot control message (text+keyboard).

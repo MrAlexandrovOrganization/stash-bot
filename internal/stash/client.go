@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/textproto"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -126,6 +127,93 @@ func (c *Client) Search(ctx context.Context, q SearchQuery) ([]*Item, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("search: status %d", resp.StatusCode)
+	}
+
+	var items []*Item
+	return items, json.NewDecoder(resp.Body).Decode(&items)
+}
+
+// Similar runs a similarity search against the backend. It uses a multipart
+// POST when ImageBytes is provided (searching for media visually similar to the
+// uploaded bytes), otherwise a GET with q= and/or item= query parameters.
+func (c *Client) Similar(ctx context.Context, req SimilarRequest) ([]*Item, error) {
+	if len(req.ImageBytes) > 0 {
+		return c.similarByImage(ctx, req)
+	}
+	return c.similarByQuery(ctx, req)
+}
+
+func (c *Client) similarByQuery(ctx context.Context, req SimilarRequest) ([]*Item, error) {
+	params := url.Values{}
+	if req.Text != "" {
+		params.Set("q", req.Text)
+	}
+	if req.ItemID != "" {
+		params.Set("item", req.ItemID)
+	}
+	if req.Limit > 0 {
+		params.Set("limit", strconv.Itoa(req.Limit))
+	}
+	if req.Offset > 0 {
+		params.Set("offset", strconv.Itoa(req.Offset))
+	}
+
+	ctx, cancel := c.withTimeout(ctx, c.timeout)
+	defer cancel()
+
+	reqURL := c.baseURL + "/similar"
+	if len(params) > 0 {
+		reqURL += "?" + params.Encode()
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("similar: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("similar: status %d", resp.StatusCode)
+	}
+
+	var items []*Item
+	return items, json.NewDecoder(resp.Body).Decode(&items)
+}
+
+func (c *Client) similarByImage(ctx context.Context, req SimilarRequest) ([]*Item, error) {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, err := mw.CreateFormFile("image", "image.jpg")
+	if err != nil {
+		return nil, err
+	}
+	if _, err := fw.Write(req.ImageBytes); err != nil {
+		return nil, err
+	}
+	if req.Limit > 0 {
+		_ = mw.WriteField("limit", strconv.Itoa(req.Limit))
+	}
+	mw.Close()
+
+	ctx, cancel := c.withTimeout(ctx, c.fileTimeout)
+	defer cancel()
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/similar", &buf)
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", mw.FormDataContentType())
+
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("similar: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("similar: status %d", resp.StatusCode)
 	}
 
 	var items []*Item

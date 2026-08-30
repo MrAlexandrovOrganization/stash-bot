@@ -32,6 +32,18 @@ func (b *Bot) handleUpdate(update telego.Update) {
 
 	sess := b.session(msg.From.ID, msg.Chat.ID)
 
+	// If the user armed "find similar by image", route the photo to a
+	// similarity query instead of saving it.
+	if sess.Pending == "simimg" {
+		sess.Pending = ""
+		if msg.Photo != nil {
+			b.handleSimilarByImage(msg)
+			return
+		}
+		send(b, msg.Chat.ID, "Отправь именно картинку для поиска похожих.")
+		return
+	}
+
 	// Media uploads always go to stash, clearing any pending state.
 	switch {
 	case msg.Photo != nil:

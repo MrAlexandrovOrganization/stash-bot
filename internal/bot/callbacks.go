@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"stash-bot/internal/stash"
+
 	"github.com/mymmrac/telego"
 	tu "github.com/mymmrac/telego/telegoutil"
 )
@@ -28,6 +30,9 @@ var callbackHandlers = map[string]func(context.Context, *Bot, CallbackContext){
 	"del":     handleDelete,
 	"back":    handleBack,
 	"cancel":  handleCancel,
+	"sim":     handleSimilar,
+	"simq":    handleSimilarTextPrompt,
+	"simimg":  handleSimilarImagePrompt,
 }
 
 type CallbackContext struct {
@@ -65,7 +70,14 @@ func handleRefresh(ctx context.Context, b *Bot, cc CallbackContext) {
 func handleSearch(ctx context.Context, b *Bot, cc CallbackContext) {
 	slog.Info("search callback", "data", cc.data)
 	cc.session.Pending = "search"
-	cc.session.LastMsgID = editOrSendHTML(b, cc.chatID, cc.session.LastMsgID, "🔍 Введи поисковый запрос:\n\nФормат: <code>текст #тег -#исключить</code>", cancelKeyboard())
+	kb := tu.InlineKeyboard(
+		tu.InlineKeyboardRow(
+			tu.InlineKeyboardButton("✨ Похожие по описанию").WithCallbackData("simq"),
+			tu.InlineKeyboardButton("🖼 Похожие по картинке").WithCallbackData("simimg"),
+		),
+		tu.InlineKeyboardRow(tu.InlineKeyboardButton("Отмена").WithCallbackData("cancel")),
+	)
+	cc.session.LastMsgID = editOrSendHTML(b, cc.chatID, cc.session.LastMsgID, "🔍 Введи поисковый запрос:\n\nФормат: <code>текст #тег -#исключить</code>", kb)
 }
 
 func handleStoragePage(ctx context.Context, b *Bot, cc CallbackContext) {
@@ -248,6 +260,36 @@ func handleCancel(ctx context.Context, b *Bot, cc CallbackContext) {
 	} else {
 		sendStoragePage(b, cc.chatID, cc.session, false)
 	}
+}
+
+// handleSimilar finds items visually similar to the current item and shows
+// them as a search-results page.
+func handleSimilar(ctx context.Context, b *Bot, cc CallbackContext) {
+	slog.Info("callback sim", "data", cc.data)
+
+	if cc.session.CurrentItem == nil {
+		slog.Warn("callback sim: no current item")
+		return
+	}
+	cc.session.Pending = ""
+	runSimilar(b, cc.chatID, cc.session, stash.SimilarRequest{ItemID: cc.session.CurrentItem.ID, Limit: similarLimit})
+}
+
+// handleSimilarTextPrompt starts a natural-language similarity query input.
+func handleSimilarTextPrompt(ctx context.Context, b *Bot, cc CallbackContext) {
+	slog.Info("callback simq", "data", cc.data)
+	cc.session.Pending = "simq"
+	cc.session.LastMsgID = editOrSendHTML(b, cc.chatID, cc.session.LastMsgID,
+		"🔍 Введи описание для поиска похожих медиа:", cancelKeyboard())
+}
+
+// handleSimilarImagePrompt arms the bot to treat the next uploaded photo as a
+// similarity query instead of saving it.
+func handleSimilarImagePrompt(ctx context.Context, b *Bot, cc CallbackContext) {
+	slog.Info("callback simimg", "data", cc.data)
+	cc.session.Pending = "simimg"
+	cc.session.LastMsgID = editOrSendHTML(b, cc.chatID, cc.session.LastMsgID,
+		"🖼 Отправь картинку, и я найду похожие медиа по ней:", cancelKeyboard())
 }
 
 func (b *Bot) handleCallback(cb *telego.CallbackQuery) {

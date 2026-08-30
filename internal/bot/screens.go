@@ -16,6 +16,9 @@ import (
 
 const pageSize = 10
 
+// similarLimit bounds results returned by a similarity search.
+const similarLimit = 50
+
 // ── Screens ───────────────────────────────────────────────────────────────────
 
 func showMainMenu(b *Bot, chatID int64, sess *Session) {
@@ -28,6 +31,10 @@ func showMainMenu(b *Bot, chatID int64, sess *Session) {
 		tu.InlineKeyboardRow(
 			tu.InlineKeyboardButton("📦 Хранилище").WithCallbackData("storage"),
 			tu.InlineKeyboardButton("🔍 Поиск").WithCallbackData("search"),
+		),
+		tu.InlineKeyboardRow(
+			tu.InlineKeyboardButton("✨ Похожие по описанию").WithCallbackData("simq"),
+			tu.InlineKeyboardButton("🖼 Похожие по картинке").WithCallbackData("simimg"),
 		),
 	)
 	sess.LastMsgID = editOrSendHTML(b, chatID, sess.LastMsgID, text, kb)
