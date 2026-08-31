@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"os"
 
@@ -8,9 +9,17 @@ import (
 	"stash-bot/internal/config"
 	"stash-bot/internal/logx"
 	"stash-bot/internal/stash"
+	"stash-bot/internal/telemetry"
 )
 
 func main() {
+	shutdownTelemetry, err := telemetry.Setup(context.Background())
+	if err != nil {
+		slog.Error("telemetry init", "error", err)
+		os.Exit(1)
+	}
+	defer shutdownTelemetry(context.Background())
+
 	cfg, err := config.Load()
 	if err != nil {
 		slog.Error("config", "error", err)

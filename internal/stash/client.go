@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 const (
@@ -32,7 +34,7 @@ type Client struct {
 func NewClient(baseURL string) *Client {
 	return &Client{
 		baseURL:     strings.TrimRight(baseURL, "/"),
-		http:        &http.Client{},
+		http:        &http.Client{Transport: otelhttp.NewTransport(http.DefaultTransport)},
 		timeout:     defaultTimeout,
 		fileTimeout: fileTimeout,
 	}

@@ -1,7 +1,10 @@
 package bot
 
 import (
+	"context"
 	"log/slog"
+
+	"go.opentelemetry.io/otel"
 
 	"stash-bot/internal/stash"
 
@@ -12,6 +15,8 @@ import (
 // ── Update routing ────────────────────────────────────────────────────────────
 
 func (b *Bot) handleUpdate(update telego.Update) {
+	_, span := otel.Tracer("stash-bot").Start(context.Background(), "telegram.update")
+	defer span.End()
 	if update.CallbackQuery != nil {
 		b.handleCallback(update.CallbackQuery)
 		return
