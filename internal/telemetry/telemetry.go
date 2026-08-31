@@ -3,6 +3,7 @@ package telemetry
 import (
 	"context"
 	"os"
+	"strings"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
@@ -17,7 +18,8 @@ func Setup(ctx context.Context) (func(context.Context) error, error) {
 	if endpoint == "" {
 		endpoint = "http://jaeger:4318"
 	}
-	exporter, err := otlptracehttp.New(ctx, otlptracehttp.WithEndpointURL(endpoint))
+	endpoint = strings.TrimRight(endpoint, "/")
+	exporter, err := otlptracehttp.New(ctx, otlptracehttp.WithEndpointURL(endpoint+"/v1/traces"))
 	if err != nil {
 		return nil, err
 	}
