@@ -4,6 +4,8 @@ go 1.26.1
 
 require github.com/mymmrac/telego v1.8.0
 
+require go.opentelemetry.io/otel v1.35.0 // indirect
+
 require (
 	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/bytedance/gopkg v0.1.3 // indirect
@@ -17,6 +19,7 @@ require (
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.69.0 // indirect
 	github.com/valyala/fastjson v1.6.10 // indirect
+	go.opentelemetry.io/otel/trace v1.35.0
 	golang.org/x/arch v0.0.0-20210923205945-b76863e36670 // indirect
 	golang.org/x/sys v0.39.0 // indirect
 )
