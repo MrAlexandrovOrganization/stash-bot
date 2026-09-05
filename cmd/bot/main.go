@@ -4,6 +4,9 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"stash-bot/internal/bot"
 	"stash-bot/internal/config"
@@ -13,12 +16,19 @@ import (
 )
 
 func main() {
+	logx.Setup("stash-bot")
 	shutdownTelemetry, err := telemetry.Setup(context.Background())
 	if err != nil {
 		slog.Error("telemetry init", "error", err)
 		os.Exit(1)
 	}
-	defer shutdownTelemetry(context.Background())
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := shutdownTelemetry(ctx); err != nil {
+			slog.Error("telemetry shutdown", "error", err)
+		}
+	}()
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -36,5 +46,7 @@ func main() {
 	}
 
 	slog.Info("starting")
-	b.Run()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	b.Run(ctx)
 }

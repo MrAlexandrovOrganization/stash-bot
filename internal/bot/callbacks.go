@@ -58,13 +58,13 @@ func handleStorage(ctx context.Context, b *Bot, cc CallbackContext) {
 	// Reuse the in-session item list when available (the just-uploaded item
 	// invalidates it via sess.Items = nil), so repeated opens don't refetch
 	// and re-upload everything. Use the explicit "refresh" button to force a reload.
-	loadStorageAndShow(b, cc.chatID, cc.session, cc.session.Items == nil)
+	loadStorageAndShow(ctx, b, cc.chatID, cc.session, cc.session.Items == nil)
 }
 
 func handleRefresh(ctx context.Context, b *Bot, cc CallbackContext) {
 	slog.Info("refresh callback", "data", cc.data)
 	cc.session.Pending = ""
-	loadStorageAndShow(b, cc.chatID, cc.session, true)
+	loadStorageAndShow(ctx, b, cc.chatID, cc.session, true)
 }
 
 func handleSearch(ctx context.Context, b *Bot, cc CallbackContext) {
@@ -167,12 +167,12 @@ func handleAIDescribe(ctx context.Context, b *Bot, cc CallbackContext) {
 	cc.session.LastMsgID = editOrSendHTML(b, cc.chatID, cc.session.LastMsgID,
 		"⏳ Генерирую нейроописание…", itemDetailKeyboard(updated))
 
-	go pollAIDescription(b, cc.chatID, cc.session, itemID)
+	go pollAIDescription(b, cc.userID, cc.chatID, cc.session, itemID)
 }
 
 // pollAIDescription waits until the item gets an AI description or an error,
 // then refreshes the item card.
-func pollAIDescription(b *Bot, chatID int64, sess *Session, itemID string) {
+func pollAIDescription(b *Bot, userID, chatID int64, sess *Session, itemID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), aiDescriptionPollTimeout)
 	defer cancel()
 
@@ -182,10 +182,12 @@ func pollAIDescription(b *Bot, chatID int64, sess *Session, itemID string) {
 	for {
 		select {
 		case <-ctx.Done():
+			unlock := b.lockUser(userID)
 			if sess.CurrentItem != nil && sess.CurrentItem.ID == itemID {
 				sess.LastMsgID = editOrSendHTML(b, chatID, sess.LastMsgID,
 					"⚠️ Нейроописание пока не готово. Обнови карточку позже.", itemDetailKeyboard(sess.CurrentItem))
 			}
+			unlock()
 			return
 		case <-ticker.C:
 			item, err := b.stash.Get(ctx, itemID)
@@ -196,10 +198,12 @@ func pollAIDescription(b *Bot, chatID int64, sess *Session, itemID string) {
 			if item.AIDescription == nil && item.AIDescriptionError == nil {
 				continue // still generating
 			}
+			unlock := b.lockUser(userID)
 			applyItemUpdate(sess, item)
 			if sess.CurrentItem != nil && sess.CurrentItem.ID == itemID {
 				showItem(b, chatID, sess)
 			}
+			unlock()
 			return
 		}
 	}
@@ -225,7 +229,7 @@ func handleDelete(ctx context.Context, b *Bot, cc CallbackContext) {
 	}
 	itemID := cc.session.CurrentItem.ID
 	slog.Info("deleting item", "id", itemID)
-	if err := b.stash.Delete(context.Background(), itemID); err != nil {
+	if err := b.stash.Delete(ctx, itemID); err != nil {
 		slog.Error("delete failed", "id", itemID, "error", err)
 		send(b, cc.chatID, "Ошибка при удалении.")
 		return
@@ -272,7 +276,7 @@ func handleSimilar(ctx context.Context, b *Bot, cc CallbackContext) {
 		return
 	}
 	cc.session.Pending = ""
-	runSimilar(b, cc.chatID, cc.session, stash.SimilarRequest{ItemID: cc.session.CurrentItem.ID, Limit: similarLimit})
+	runSimilar(ctx, b, cc.chatID, cc.session, stash.SimilarRequest{ItemID: cc.session.CurrentItem.ID, Limit: similarLimit})
 }
 
 // handleSimilarTextPrompt starts a natural-language similarity query input.
@@ -292,8 +296,8 @@ func handleSimilarImagePrompt(ctx context.Context, b *Bot, cc CallbackContext) {
 		"🖼 Отправь картинку, и я найду похожие медиа по ней:", cancelKeyboard())
 }
 
-func (b *Bot) handleCallback(cb *telego.CallbackQuery) {
-	_ = b.api.AnswerCallbackQuery(context.Background(), tu.CallbackQuery(cb.ID))
+func (b *Bot) handleCallback(ctx context.Context, cb *telego.CallbackQuery) {
+	_ = b.api.AnswerCallbackQuery(ctx, tu.CallbackQuery(cb.ID))
 
 	if cb.From.ID != b.rootID {
 		slog.Warn("callback: unauthorized", "user_id", cb.From.ID)
@@ -319,7 +323,7 @@ func (b *Bot) handleCallback(cb *telego.CallbackQuery) {
 	slog.Info("callback", "action", action, "payload", payload, "screen", sess.Screen)
 
 	if callback, ok := callbackHandlers[action]; ok {
-		callback(context.Background(), b, CallbackContext{
+		callback(ctx, b, CallbackContext{
 			chatID:  chatID,
 			userID:  userID,
 			session: sess,

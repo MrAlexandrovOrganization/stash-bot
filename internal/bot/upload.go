@@ -7,18 +7,26 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"stash-bot/internal/stash"
 
 	"github.com/mymmrac/telego"
 )
 
+const (
+	telegramDownloadTimeout = 5 * time.Minute
+	maxTelegramFileBytes    = 512 << 20
+)
+
+var telegramHTTPClient = &http.Client{Timeout: telegramDownloadTimeout}
+
 // ── Upload ────────────────────────────────────────────────────────────────────
 
-func (b *Bot) handleUpload(msg *telego.Message, mediaType stash.MediaType) {
-	ctx := context.Background()
+func (b *Bot) handleUpload(ctx context.Context, msg *telego.Message, mediaType stash.MediaType) {
 
 	fileID, fileName, contentType, fileUniqueID := extractFileInfo(msg, mediaType)
 	if fileID == "" {
@@ -45,12 +53,12 @@ func (b *Bot) handleUpload(msg *telego.Message, mediaType stash.MediaType) {
 		// /var/lib/telegram-bot-api). GetFile returns the absolute path on
 		// that volume, so read it directly from disk — no URL guessing, no
 		// 404s. Fall back to HTTP if the mount is unavailable.
-		if d, rerr := os.ReadFile(file.FilePath); rerr == nil {
+		if d, rerr := readFileLimited(file.FilePath); rerr == nil {
 			data = d
 			size = int64(len(d))
 		} else {
 			slog.Warn("upload: direct file read failed, falling back to HTTP",
-				"path", file.FilePath, "error", rerr)
+				"error", rerr)
 		}
 	}
 
@@ -65,8 +73,7 @@ func (b *Bot) handleUpload(msg *telego.Message, mediaType stash.MediaType) {
 			}
 		}
 		fileURL := b.api.FileDownloadURL(filePath)
-		slog.Info("upload: telegram file url", "url", fileURL)
-		resp, err := http.Get(fileURL) //nolint:noctx
+		resp, err := downloadTelegramHTTP(ctx, fileURL)
 		if err != nil {
 			slog.Error("upload: http get failed", "error", err)
 			send(b, msg.Chat.ID, "Не удалось скачать файл.")
@@ -80,7 +87,7 @@ func (b *Bot) handleUpload(msg *telego.Message, mediaType stash.MediaType) {
 			send(b, msg.Chat.ID, "Не удалось скачать файл из Telegram.")
 			return
 		}
-		d, rerr := io.ReadAll(resp.Body)
+		d, rerr := readLimited(resp.Body)
 		if rerr != nil {
 			slog.Error("upload: reading body", "error", rerr)
 			send(b, msg.Chat.ID, "Не удалось скачать файл.")
@@ -120,8 +127,7 @@ func (b *Bot) handleUpload(msg *telego.Message, mediaType stash.MediaType) {
 
 // handleSimilarByImage downloads the photo from the sent message and finds
 // visually similar media in stash without saving the photo itself.
-func (b *Bot) handleSimilarByImage(msg *telego.Message) {
-	ctx := context.Background()
+func (b *Bot) handleSimilarByImage(ctx context.Context, msg *telego.Message) {
 	sess := b.session(msg.From.ID, msg.Chat.ID)
 
 	fileID, _, _, _ := extractFileInfo(msg, stash.MediaTypeImage)
@@ -139,7 +145,7 @@ func (b *Bot) handleSimilarByImage(msg *telego.Message) {
 	}
 	slog.Info("similar by image: querying stash", "size", len(data))
 
-	runSimilar(b, msg.Chat.ID, sess, stash.SimilarRequest{ImageBytes: data, Limit: similarLimit})
+	runSimilar(ctx, b, msg.Chat.ID, sess, stash.SimilarRequest{ImageBytes: data, Limit: similarLimit})
 }
 
 // downloadFile fetches a Telegram file by id into memory, preferring the local
@@ -151,11 +157,11 @@ func (b *Bot) downloadFile(ctx context.Context, fileID string) ([]byte, error) {
 	}
 
 	if b.telegramAPIURL != "" {
-		if d, rerr := os.ReadFile(file.FilePath); rerr == nil {
+		if d, rerr := readFileLimited(file.FilePath); rerr == nil {
 			return d, nil
 		} else {
 			slog.Warn("downloadFile: direct read failed, falling back to HTTP",
-				"path", file.FilePath, "error", rerr)
+				"error", rerr)
 		}
 	}
 
@@ -166,7 +172,7 @@ func (b *Bot) downloadFile(ctx context.Context, fileID string) ([]byte, error) {
 		}
 	}
 	fileURL := b.api.FileDownloadURL(filePath)
-	resp, err := http.Get(fileURL) //nolint:noctx
+	resp, err := downloadTelegramHTTP(ctx, fileURL)
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +180,52 @@ func (b *Bot) downloadFile(ctx context.Context, fileID string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("telegram download status %d", resp.StatusCode)
 	}
-	return io.ReadAll(resp.Body)
+	return readLimited(resp.Body)
+}
+
+func downloadTelegramHTTP(ctx context.Context, rawURL string) (*http.Response, error) {
+	_, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("telegram download URL is invalid")
+	}
+	// The URL contains a bearer token. Keep it out of errors and logs.
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("telegram download request is invalid")
+	}
+	resp, err := telegramHTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("telegram download request failed")
+	}
+	if resp.ContentLength > maxTelegramFileBytes {
+		resp.Body.Close()
+		return nil, fmt.Errorf("telegram file exceeds %d bytes", maxTelegramFileBytes)
+	}
+	return resp, nil
+}
+
+func readFileLimited(path string) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return readLimited(file)
+}
+
+func readLimited(r io.Reader) ([]byte, error) {
+	return readLimitedBytes(r, maxTelegramFileBytes)
+}
+
+func readLimitedBytes(r io.Reader, limit int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("file exceeds %d bytes", limit)
+	}
+	return data, nil
 }
 
 // forwardSource returns a human-readable name of the original sender for

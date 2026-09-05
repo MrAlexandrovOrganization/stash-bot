@@ -13,19 +13,18 @@ import (
 
 // ── Text input ────────────────────────────────────────────────────────────────
 
-func (b *Bot) handleTextInput(msg *telego.Message) {
-	ctx := context.Background()
+func (b *Bot) handleTextInput(ctx context.Context, msg *telego.Message) {
 	text := strings.TrimSpace(msg.Text)
 	sess := b.session(msg.From.ID, msg.Chat.ID)
 
 	switch sess.Pending {
 	case "search":
 		sess.Pending = ""
-		doSearch(b, msg.Chat.ID, sess, text)
+		doSearch(ctx, b, msg.Chat.ID, sess, text)
 
 	case "simq":
 		sess.Pending = ""
-		runSimilar(b, msg.Chat.ID, sess, stash.SimilarRequest{Text: text, Limit: similarLimit})
+		runSimilar(ctx, b, msg.Chat.ID, sess, stash.SimilarRequest{Text: text, Limit: similarLimit})
 
 	case "desc":
 		sess.Pending = ""
@@ -38,7 +37,7 @@ func (b *Bot) handleTextInput(msg *telego.Message) {
 
 	default:
 		// No pending state: treat message as a search query.
-		doSearch(b, msg.Chat.ID, sess, text)
+		doSearch(ctx, b, msg.Chat.ID, sess, text)
 	}
 }
 
@@ -70,7 +69,7 @@ func applyItemUpdate(sess *Session, updated *stash.Item) {
 
 // ── Search ────────────────────────────────────────────────────────────────────
 
-func doSearch(b *Bot, chatID int64, sess *Session, query string) {
+func doSearch(ctx context.Context, b *Bot, chatID int64, sess *Session, query string) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		send(b, chatID, "Введи текст для поиска.")
@@ -80,7 +79,7 @@ func doSearch(b *Bot, chatID int64, sess *Session, query string) {
 	text, posTags, negTags := parseSearchQuery(query)
 	slog.Info("search", "text", text, "pos_tags", posTags, "neg_tags", negTags)
 
-	items, err := b.stash.Search(context.Background(), stash.SearchQuery{Text: text, Tags: posTags})
+	items, err := b.stash.Search(ctx, stash.SearchQuery{Text: text, Tags: posTags})
 	if err != nil {
 		slog.Error("search: stash failed", "error", err)
 		send(b, chatID, "Ошибка поиска.")
@@ -119,8 +118,8 @@ func doSearch(b *Bot, chatID int64, sess *Session, query string) {
 
 // runSimilar executes a similarity search, drops the current media from the
 // results (when searching by item) and shows the page.
-func runSimilar(b *Bot, chatID int64, sess *Session, req stash.SimilarRequest) {
-	items, err := b.stash.Similar(context.Background(), req)
+func runSimilar(ctx context.Context, b *Bot, chatID int64, sess *Session, req stash.SimilarRequest) {
+	items, err := b.stash.Similar(ctx, req)
 	if err != nil {
 		slog.Error("similar: stash failed", "error", err)
 		send(b, chatID, "Ошибка похожего поиска.")

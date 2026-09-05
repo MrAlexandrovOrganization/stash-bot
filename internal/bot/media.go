@@ -2,7 +2,6 @@ package bot
 
 import (
 	"context"
-	"io"
 	"log/slog"
 	"strings"
 	"sync"
@@ -365,7 +364,7 @@ func loadItemData(b *Bot, it *stash.Item) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, err := io.ReadAll(rc)
+	data, err := readLimited(rc)
 	rc.Close()
 	return data, err
 }
@@ -571,7 +570,7 @@ func prefetchItems(b *Bot, items []*stash.Item) {
 				slog.Error("prefetch: get file", "id", it.ID, "error", err)
 				return
 			}
-			data, err := io.ReadAll(rc)
+			data, err := readLimited(rc)
 			rc.Close()
 			if err != nil {
 				slog.Error("prefetch: read", "id", it.ID, "error", err)

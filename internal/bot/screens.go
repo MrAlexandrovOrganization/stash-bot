@@ -58,10 +58,10 @@ func deleteMediaMessages(b *Bot, chatID int64, sess *Session) {
 }
 
 // loadStorageAndShow loads all items from stash (optionally force-reloading) and shows page 0.
-func loadStorageAndShow(b *Bot, chatID int64, sess *Session, reload bool) {
+func loadStorageAndShow(ctx context.Context, b *Bot, chatID int64, sess *Session, reload bool) {
 	if reload || sess.Items == nil {
 		slog.Info("loading storage from stash")
-		items, err := b.stash.Search(context.Background(), stash.SearchQuery{})
+		items, err := b.stash.Search(ctx, stash.SearchQuery{})
 		if err != nil {
 			slog.Error("load storage: stash search failed", "error", err)
 			send(b, chatID, "Ошибка загрузки хранилища.")

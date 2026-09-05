@@ -34,9 +34,16 @@ restart:
 repair:
 	$(DOCKER_COMPOSE) run --rm --entrypoint /app/repair-media stash-bot
 
+.PHONY: fmt
+fmt:
+	gofmt -w $$(git ls-files '*.go')
+
+.PHONY: fmt-check
+fmt-check:
+	@files="$$(gofmt -l .)"; status=$$?; test $$status -eq 0 || exit $$status; test -z "$$files" || { printf '%s\n' "$$files"; exit 1; }
+
 .PHONY: format
-format:
-	@test -z "$$(gofmt -l .)" || (gofmt -l . && exit 1)
+format: fmt-check
 
 .PHONY: test
 test:
@@ -45,6 +52,16 @@ test:
 .PHONY: vet
 vet:
 	go vet ./...
+
+.PHONY: lint
+lint: vet
+
+.PHONY: config-check
+config-check:
+	@BOT_TOKEN=dummy-token ROOT_ID=1 STASH_URL=http://stash:8080 docker compose config --quiet
+
+.PHONY: check
+check: fmt-check lint test config-check
 
 .PHONY: clean
 clean:

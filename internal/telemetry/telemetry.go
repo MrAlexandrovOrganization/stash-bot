@@ -23,7 +23,11 @@ func Setup(ctx context.Context) (func(context.Context) error, error) {
 	if err != nil {
 		return nil, err
 	}
-	res, err := resource.New(ctx, resource.WithAttributes(semconv.ServiceName("stash-bot")))
+	serviceName := os.Getenv("OTEL_SERVICE_NAME")
+	if serviceName == "" {
+		serviceName = "stash-bot"
+	}
+	res, err := resource.New(ctx, resource.WithAttributes(semconv.ServiceName(serviceName)))
 	if err != nil {
 		return nil, err
 	}

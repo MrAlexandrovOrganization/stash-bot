@@ -15,10 +15,14 @@ import (
 // ── Update routing ────────────────────────────────────────────────────────────
 
 func (b *Bot) handleUpdate(update telego.Update) {
-	_, span := otel.Tracer("stash-bot").Start(context.Background(), "telegram.update")
+	ctx, span := otel.Tracer("stash-bot").Start(context.Background(), "telegram.update")
 	defer span.End()
+	userID := updateUserID(update)
+	if userID != 0 {
+		defer b.lockUser(userID)()
+	}
 	if update.CallbackQuery != nil {
-		b.handleCallback(update.CallbackQuery)
+		b.handleCallback(ctx, update.CallbackQuery)
 		return
 	}
 	if update.Message == nil {
@@ -42,7 +46,7 @@ func (b *Bot) handleUpdate(update telego.Update) {
 	if sess.Pending == "simimg" {
 		sess.Pending = ""
 		if msg.Photo != nil {
-			b.handleSimilarByImage(msg)
+			b.handleSimilarByImage(ctx, msg)
 			return
 		}
 		send(b, msg.Chat.ID, "Отправь именно картинку для поиска похожих.")
@@ -53,19 +57,19 @@ func (b *Bot) handleUpdate(update telego.Update) {
 	switch {
 	case msg.Photo != nil:
 		sess.Pending = ""
-		b.handleUpload(msg, stash.MediaTypeImage)
+		b.handleUpload(ctx, msg, stash.MediaTypeImage)
 		return
 	case msg.Video != nil:
 		sess.Pending = ""
-		b.handleUpload(msg, stash.MediaTypeVideo)
+		b.handleUpload(ctx, msg, stash.MediaTypeVideo)
 		return
 	case msg.Animation != nil:
 		sess.Pending = ""
-		b.handleUpload(msg, stash.MediaTypeGIF)
+		b.handleUpload(ctx, msg, stash.MediaTypeGIF)
 		return
 	case msg.Document != nil:
 		sess.Pending = ""
-		b.handleUpload(msg, stash.MediaTypeDocument)
+		b.handleUpload(ctx, msg, stash.MediaTypeDocument)
 		return
 	}
 
@@ -77,6 +81,16 @@ func (b *Bot) handleUpdate(update telego.Update) {
 	}
 
 	if msg.Text != "" {
-		b.handleTextInput(msg)
+		b.handleTextInput(ctx, msg)
 	}
+}
+
+func updateUserID(update telego.Update) int64 {
+	if update.CallbackQuery != nil {
+		return update.CallbackQuery.From.ID
+	}
+	if update.Message != nil && update.Message.From != nil {
+		return update.Message.From.ID
+	}
+	return 0
 }

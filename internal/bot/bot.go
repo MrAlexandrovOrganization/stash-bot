@@ -19,6 +19,8 @@ type Bot struct {
 	sessions       sync.Map // int64 (userID) → *Session
 	fileCache      sync.Map // string (item ID) → []byte (prefetched raw bytes)
 	fileIDCache    sync.Map // string (item ID) → string (Telegram file_id)
+	userLocks      sync.Map // int64 (userID) → *sync.Mutex
+	updateSem      chan struct{}
 }
 
 // cacheFileID records a known Telegram file_id for an item so it can later be
@@ -52,11 +54,11 @@ func New(token string, rootID int64, stashClient *stash.Client, telegramAPIURL s
 		rootID:         rootID,
 		token:          token,
 		telegramAPIURL: telegramAPIURL,
+		updateSem:      make(chan struct{}, 8),
 	}, nil
 }
 
-func (b *Bot) Run() {
-	ctx := context.Background()
+func (b *Bot) Run(ctx context.Context) {
 	updates, err := b.api.UpdatesViaLongPolling(ctx, nil)
 	if err != nil {
 		slog.Error("bot: long polling failed", "error", err)
@@ -64,8 +66,24 @@ func (b *Bot) Run() {
 	}
 	slog.Info("bot started", "username", b.api.Username())
 	for update := range updates {
-		go b.handleUpdate(update)
+		b.updateSem <- struct{}{}
+		go func(update telego.Update) {
+			defer func() {
+				<-b.updateSem
+				if recovered := recover(); recovered != nil {
+					slog.Error("update handler panic", "panic", recovered)
+				}
+			}()
+			b.handleUpdate(update)
+		}(update)
 	}
+}
+
+func (b *Bot) lockUser(userID int64) func() {
+	value, _ := b.userLocks.LoadOrStore(userID, &sync.Mutex{})
+	mu := value.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
 }
 
 func (b *Bot) session(userID, chatID int64) *Session {
