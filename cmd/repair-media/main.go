@@ -47,7 +47,7 @@ func main() {
 		slog.Info("DRY RUN: no changes will be made")
 	}
 
-	opts := []telego.BotOption{}
+	opts := []telego.BotOption{telego.WithHTTPClient(&http.Client{Timeout: 5 * time.Minute})}
 	if localAPI != "" {
 		opts = append(opts, telego.WithAPIServer(localAPI))
 	}

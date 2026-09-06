@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"stash-bot/internal/stash"
 	"sync"
 
@@ -12,6 +13,7 @@ import (
 
 type Bot struct {
 	api            *telego.Bot
+	fileAPI        *telego.Bot
 	stash          *stash.Client
 	rootID         int64
 	token          string
@@ -40,7 +42,9 @@ func (b *Bot) lookupFileID(itemID string) (string, bool) {
 }
 
 func New(token string, rootID int64, stashClient *stash.Client, telegramAPIURL string) (*Bot, error) {
-	opts := []telego.BotOption{}
+	// net/http honors HTTPS_PROXY (including SOCKS) and NO_PROXY, unlike
+	// Telego's default fasthttp caller. Allow enough time for long polling.
+	opts := []telego.BotOption{telego.WithHTTPClient(&http.Client{Timeout: telegramDownloadTimeout})}
 	if telegramAPIURL != "" {
 		opts = append(opts, telego.WithAPIServer(telegramAPIURL))
 	}
@@ -48,8 +52,14 @@ func New(token string, rootID int64, stashClient *stash.Client, telegramAPIURL s
 	if err != nil {
 		return nil, fmt.Errorf("telegram bot: %w", err)
 	}
+	// GetFile uses its own context deadline instead of a client-wide timeout.
+	fileAPI, err := telego.NewBot(token, append(opts, telego.WithHTTPClient(&http.Client{}))...)
+	if err != nil {
+		return nil, fmt.Errorf("telegram file bot: %w", err)
+	}
 	return &Bot{
 		api:            api,
+		fileAPI:        fileAPI,
 		stash:          stashClient,
 		rootID:         rootID,
 		token:          token,

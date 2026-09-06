@@ -3,6 +3,7 @@ package bot
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -18,6 +19,7 @@ import (
 )
 
 const (
+	telegramGetFileTimeout  = 5 * time.Minute
 	telegramDownloadTimeout = 5 * time.Minute
 	maxTelegramFileBytes    = 512 << 20
 )
@@ -37,7 +39,7 @@ func (b *Bot) handleUpload(ctx context.Context, msg *telego.Message, mediaType s
 
 	description, tags := parseCaption(msg.Caption)
 
-	file, err := b.api.GetFile(ctx, &telego.GetFileParams{FileID: fileID})
+	file, err := b.getFile(ctx, fileID)
 	if err != nil {
 		slog.Error("upload: get file", "error", err)
 		send(b, msg.Chat.ID, "Не удалось получить файл из Telegram.")
@@ -83,7 +85,7 @@ func (b *Bot) handleUpload(ctx context.Context, msg *telego.Message, mediaType s
 		if resp.StatusCode != http.StatusOK {
 			// Telegram (or the local Bot API server) returned an error body;
 			// without this check that body would be stored as the "image".
-			slog.Error("upload: telegram download status", "status", resp.StatusCode, "file_url", fileURL)
+			slog.Error("upload: telegram download status", "status", resp.StatusCode)
 			send(b, msg.Chat.ID, "Не удалось скачать файл из Telegram.")
 			return
 		}
@@ -151,7 +153,7 @@ func (b *Bot) handleSimilarByImage(ctx context.Context, msg *telego.Message) {
 // downloadFile fetches a Telegram file by id into memory, preferring the local
 // Bot API shared volume when configured, and falling back to HTTP download.
 func (b *Bot) downloadFile(ctx context.Context, fileID string) ([]byte, error) {
-	file, err := b.api.GetFile(ctx, &telego.GetFileParams{FileID: fileID})
+	file, err := b.getFile(ctx, fileID)
 	if err != nil {
 		return nil, err
 	}
@@ -183,6 +185,27 @@ func (b *Bot) downloadFile(ctx context.Context, fileID string) ([]byte, error) {
 	return readLimited(resp.Body)
 }
 
+func (b *Bot) getFile(ctx context.Context, fileID string) (*telego.File, error) {
+	// A local Bot API server may download the file during GetFile itself.
+	ctx, cancel := context.WithTimeout(ctx, telegramGetFileTimeout)
+	defer cancel()
+	file, err := b.fileAPI.GetFile(ctx, &telego.GetFileParams{FileID: fileID})
+	if err != nil {
+		return nil, fmt.Errorf("telegram get file: %w", telegramRequestCause(err))
+	}
+	return file, nil
+}
+
+// net/http includes the token-bearing request URL in url.Error. Keep the
+// underlying transport cause so cancellation and timeout remain inspectable.
+func telegramRequestCause(err error) error {
+	var urlErr *url.Error
+	for errors.As(err, &urlErr) {
+		err = urlErr.Err
+	}
+	return err
+}
+
 func downloadTelegramHTTP(ctx context.Context, rawURL string) (*http.Response, error) {
 	_, err := url.Parse(rawURL)
 	if err != nil {
@@ -195,7 +218,7 @@ func downloadTelegramHTTP(ctx context.Context, rawURL string) (*http.Response, e
 	}
 	resp, err := telegramHTTPClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("telegram download request failed")
+		return nil, fmt.Errorf("telegram download request failed: %w", telegramRequestCause(err))
 	}
 	if resp.ContentLength > maxTelegramFileBytes {
 		resp.Body.Close()
