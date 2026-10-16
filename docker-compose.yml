@@ -1,5 +1,6 @@
 services:
   stash-bot:
+    container_name: "${CONTAINER_NAME_PREFIX:-}stash-bot"
     build: .
     restart: unless-stopped
     environment:
