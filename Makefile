@@ -1,4 +1,6 @@
-DOCKER_COMPOSE = docker compose
+DOCKER_COMPOSE_BASE = docker compose --project-directory "$(CURDIR)"
+include makefiles/compose.mk
+DOCKER_COMPOSE = docker compose --project-directory "$(CURDIR)" $(COMPOSE_FLAGS)
 BINARY = bot
 
 .PHONY: build
@@ -58,7 +60,7 @@ lint: vet
 
 .PHONY: config-check
 config-check:
-	@BOT_TOKEN=dummy-token ROOT_ID=1 STASH_URL=http://stash:8080 docker compose config --quiet
+	@BOT_TOKEN=dummy-token ROOT_ID=1 STASH_URL=http://stash:8080 $(DOCKER_COMPOSE) config --quiet
 
 .PHONY: check
 check: fmt-check lint test config-check
@@ -66,3 +68,10 @@ check: fmt-check lint test config-check
 .PHONY: clean
 clean:
 	rm -f $(BINARY)
+
+# Read-only validation of every tracked Compose combination, without runtime secrets.
+.PHONY: compose-layout-check
+compose-layout-check:
+	$(DOCKER_COMPOSE_BASE) --env-file /dev/null -f compose/docker-compose.yml --profile '*' config --no-interpolate --no-env-resolution --quiet
+
+check: compose-layout-check
