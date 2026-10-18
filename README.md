@@ -1,4 +1,4 @@
-# telegram-bots__stash-bot
+# stash-bot
 
 ## Структура Compose
 
