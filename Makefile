@@ -1,6 +1,7 @@
 DOCKER_COMPOSE_BASE = docker compose --project-directory "$(CURDIR)"
 include makefiles/compose.mk
 DOCKER_COMPOSE = docker compose --project-directory "$(CURDIR)" $(COMPOSE_FLAGS)
+include makefiles/versions.mk
 BINARY = bot
 
 .PHONY: build
@@ -75,3 +76,23 @@ compose-layout-check:
 	$(DOCKER_COMPOSE_BASE) --env-file /dev/null -f compose/docker-compose.yml --profile '*' config --no-interpolate --no-env-resolution --quiet
 
 check: compose-layout-check
+
+.PHONY: versions image-build image-publish image-check image-deploy image-activate image-compose
+versions:
+	@$(foreach v,$(VERSION_VARS),printf '%s=%s\n' '$(v)' '$($(v))';)
+export IMAGE_COMPOSE_FILE := compose/docker-compose.yml
+export IMAGE_APP_SERVICES := stash-bot
+image-build:
+	python3 scripts/images.py build
+image-publish:
+	python3 scripts/images.py publish
+image-check:
+	python3 -B scripts/test_images.py
+image-deploy:
+	python3 scripts/images.py deploy
+image-activate:
+	$(IMAGE_COMPOSE) up -d --no-build --pull never --no-deps stash-bot
+export IMAGE_ARGS
+image-compose:
+	python3 scripts/images.py compose
+include makefiles/ci-deploy.mk

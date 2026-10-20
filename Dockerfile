@@ -1,4 +1,6 @@
-FROM golang:1.26.7-alpine AS builder
+ARG GO_VERSION
+ARG ALPINE_VERSION
+FROM golang:${GO_VERSION}-alpine AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
@@ -6,7 +8,7 @@ COPY . .
 RUN CGO_ENABLED=0 go build -o bot ./cmd/bot && \
     CGO_ENABLED=0 go build -o repair-media ./cmd/repair-media
 
-FROM alpine:3.21
+FROM alpine:${ALPINE_VERSION}
 RUN apk add --no-cache ca-certificates
 RUN addgroup -S app && adduser -S app -G app
 WORKDIR /app

@@ -1,7 +1,11 @@
 services:
   stash-bot:
     container_name: "${CONTAINER_NAME_PREFIX:-}stash-bot"
-    build: .
+    build:
+      context: .
+      args:
+        GO_VERSION: ${GO_VERSION:?Run via make}
+        ALPINE_VERSION: ${ALPINE_VERSION:?Run via make}
     restart: unless-stopped
     environment:
       BOT_TOKEN: "${BOT_TOKEN}"
@@ -10,9 +14,9 @@ services:
       OTEL_SERVICE_NAME: "${OTEL_SERVICE_NAME:-stash-bot}"
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4318}"
       # Temporary public API path while the shared API egress is being rebuilt.
-      TELEGRAM_LOCAL_API_URL: ""
-      HTTPS_PROXY: "${TELEGRAM_HTTPS_PROXY:-socks5://host.docker.internal:10880}"
-      NO_PROXY: "stash,telegram-bot-api,jaeger,localhost,127.0.0.1"
+      TELEGRAM_LOCAL_API_URL: "${TELEGRAM_LOCAL_API_URL:-}"
+      HTTPS_PROXY: "${TELEGRAM_HTTPS_PROXY:-}"
+      NO_PROXY: "${NO_PROXY:-stash,telegram-bot-api,jaeger,localhost,127.0.0.1}"
       # Passthrough for the repair-media one-shot tool (DRY_RUN=1 to preview).
       DRY_RUN: "${DRY_RUN:-}"
     extra_hosts:
