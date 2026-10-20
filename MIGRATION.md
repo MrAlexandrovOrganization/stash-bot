@@ -1,7 +1,7 @@
 # server → Hostkey Russia
 
 The bot runs on Russia using its shared local Telegram Bot API and volume.
-STASH_URL points over the encrypted tailnet to http://100.64.0.11:8080.
+STASH_URL points over the encrypted tailnet to the Stash sidecar on WSL:8080.
 NO_PROXY must include that address. Stop the source polling instance before
 starting the destination. Log out the former API session when changing from
 public Telegram to the local API. Never start two polling instances.
