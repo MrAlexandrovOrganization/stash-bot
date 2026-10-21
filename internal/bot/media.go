@@ -2,7 +2,9 @@ package bot
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 
@@ -66,6 +68,20 @@ type mediaSlot struct {
 // all message IDs in the group. Inputs (and, for uncached items, the downloads
 // from stash) are prepared concurrently; the group is then uploaded in one call.
 func sendMediaGroupItems(b *Bot, chatID int64, items []*stash.Item) []int {
+	return sendMediaGroupItemsAttempt(b, chatID, items, false)
+}
+
+func sendMediaGroupItemsAttempt(b *Bot, chatID int64, items []*stash.Item, forceUpload bool) []int {
+	// Telegram albums require at least two entries. Search results and the
+	// last storage page can contain only one photo/video.
+	if len(items) == 1 {
+		sent, err := sendItemMessage(b, chatID, items[0], "", forceUpload)
+		if err != nil {
+			slog.Error("sendMediaGroupItems: single item", "id", items[0].ID, "error", err)
+			return nil
+		}
+		return []int{sent.MessageID}
+	}
 	type prepared struct {
 		input telego.InputMedia
 		isNew bool
@@ -73,21 +89,14 @@ func sendMediaGroupItems(b *Bot, chatID int64, items []*stash.Item) []int {
 	preparedList := make([]prepared, len(items))
 
 	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var firstErr error
 	for i, it := range items {
 		i, it := i, it
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			inp, isNew, err := prepareMediaInput(b, it)
+			inp, isNew, err := prepareMediaInput(b, it, forceUpload)
 			if err != nil {
 				slog.Error("sendMediaGroupItems: prepare input", "id", it.ID, "error", err)
-				mu.Lock()
-				if firstErr == nil {
-					firstErr = err
-				}
-				mu.Unlock()
 				return
 			}
 			preparedList[i] = prepared{input: inp, isNew: isNew}
@@ -109,9 +118,18 @@ func sendMediaGroupItems(b *Bot, chatID int64, items []*stash.Item) []int {
 	if len(media) == 0 {
 		return nil
 	}
+	if len(media) == 1 {
+		return sendMediaGroupItemsAttempt(b, chatID, []*stash.Item{slots[0].item}, forceUpload)
+	}
 
 	slog.Info("sendMediaGroupItems: sending group", "input_count", len(media))
 	sentMsgs, err := b.api.SendMediaGroup(context.Background(), tu.MediaGroup(tu.ID(chatID), media...))
+	if err != nil && !forceUpload && invalidTelegramFileID(err) && slices.ContainsFunc(slots, func(s mediaSlot) bool { return !s.isNew }) {
+		// A rejected cached ID rejects the whole album. Rebuild every input:
+		// multipart readers from the first attempt may already be consumed.
+		slog.Warn("sendMediaGroupItems: stale Telegram cache, retrying from Stash")
+		return sendMediaGroupItemsAttempt(b, chatID, items, true)
+	}
 	if err != nil {
 		slog.Error("sendMediaGroupItems: send", "error", err)
 		return nil
@@ -142,25 +160,12 @@ func sendMediaGroupItems(b *Bot, chatID int64, items []*stash.Item) []int {
 // No caption is set — the page text will be applied to the last message after all items are sent.
 // Returns the sent message ID (0 on failure).
 func sendSingleItem(b *Bot, chatID int64, it *stash.Item) int {
-	// Fast path: already cached in Telegram.
-	if fid, ok := b.lookupFileID(it.ID); ok {
-		slog.Info("sendSingleItem: cached", "id", it.ID)
-		it.TelegramFileID = &fid
-		return sendSingleFromCache(b, chatID, it, "")
-	}
-	if it.TelegramFileID != nil && *it.TelegramFileID != "" {
-		slog.Info("sendSingleItem: cached", "id", it.ID)
-		return sendSingleFromCache(b, chatID, it, "")
-	}
-
-	// Slow path: load data, upload, cache result.
-	slog.Info("sendSingleItem: uploading", "id", it.ID)
-	data, err := loadItemData(b, it)
+	sent, err := sendItemMessage(b, chatID, it, "", false)
 	if err != nil {
-		slog.Error("sendSingleItem: load data", "id", it.ID, "error", err)
+		slog.Error("sendSingleItem: send", "id", it.ID, "error", err)
 		return 0
 	}
-	return uploadSingleItem(b, chatID, it, data, "")
+	return sent.MessageID
 }
 
 // ── File sending ──────────────────────────────────────────────────────────────
@@ -169,39 +174,14 @@ func sendSingleItem(b *Bot, chatID int64, it *stash.Item) int {
 // If item.TelegramFileID is already set, the file is sent directly by Telegram file_id.
 // On first upload the received file_id is saved back to stash asynchronously.
 func sendFile(b *Bot, chatID int64, item *stash.Item) {
-	ctx := context.Background()
 	caption := sanitizeUTF8(item.Description)
-
-	// Fast path: Telegram file_id already cached/persisted.
-	if fid, ok := b.lookupFileID(item.ID); ok {
-		slog.Info("sendFile: using cached tg file_id", "id", item.ID)
-		sendByTgFileID(b, chatID, fid, item.Type, caption)
-		return
-	}
-	if item.TelegramFileID != nil && *item.TelegramFileID != "" {
-		slog.Info("sendFile: using cached tg file_id", "id", item.ID)
-		sendByTgFileID(b, chatID, *item.TelegramFileID, item.Type, caption)
-		return
-	}
-
-	// Slow path: download from stash, upload to Telegram, then persist file_id.
-	slog.Info("sendFile: downloading from stash", "id", item.ID, "name", item.FileName)
-	data, err := loadItemData(b, item)
-	if err != nil {
-		slog.Error("sendFile: load data", "id", item.ID, "error", err)
-		send(b, chatID, "Не удалось получить файл.")
-		return
-	}
-
-	slog.Info("sendFile: uploading to Telegram", "id", item.ID, "bytes", len(data))
-	sent, tgID, err := sendFileByType(ctx, b, chatID, item.Type, item.FileName, data, caption)
+	_, err := sendItemMessage(b, chatID, item, caption, false)
 	if err != nil {
 		slog.Error("sendFile: send failed", "id", item.ID, "error", err)
+		if errors.Is(err, errLoadStashOriginal) {
+			send(b, chatID, "Не удалось получить файл.")
+		}
 		return
-	}
-	_ = sent
-	if tgID != "" {
-		persistTgFileID(b, item, tgID)
 	}
 	slog.Info("sendFile: done", "id", item.ID)
 }
@@ -211,13 +191,13 @@ func sendFile(b *Bot, chatID int64, item *stash.Item) {
 // prepareMediaInput builds a Telegram media group input for one item.
 // Returns (input, isNew, error) where isNew=true means file_id must be cached after send.
 // No caption is set here — the page text is applied to the last message after the group is sent.
-func prepareMediaInput(b *Bot, it *stash.Item) (telego.InputMedia, bool, error) {
-	if fid, ok := b.lookupFileID(it.ID); ok {
+func prepareMediaInput(b *Bot, it *stash.Item, forceUpload bool) (telego.InputMedia, bool, error) {
+	if fid, ok := b.lookupFileID(it.ID); ok && !forceUpload {
 		slog.Info("prepareMediaInput: cached (fileIDCache)", "id", it.ID, "type", it.Type)
 		inp := buildGroupInput(it.Type, tu.FileFromID(fid))
 		return inp, false, nil
 	}
-	if it.TelegramFileID != nil && *it.TelegramFileID != "" {
+	if !forceUpload && it.TelegramFileID != nil && *it.TelegramFileID != "" {
 		slog.Info("prepareMediaInput: cached (item)", "id", it.ID, "type", it.Type)
 		inp := buildGroupInput(it.Type, tu.FileFromID(*it.TelegramFileID))
 		return inp, false, nil
@@ -228,56 +208,40 @@ func prepareMediaInput(b *Bot, it *stash.Item) (telego.InputMedia, bool, error) 
 	if err != nil {
 		return nil, false, err
 	}
-	inp := buildGroupInput(it.Type, tu.FileFromBytes(data, it.FileName))
+	// Different stored items can have the same original filename. Multipart
+	// attachment names must remain distinct within the album.
+	inp := buildGroupInput(it.Type, tu.FileFromBytes(data, it.ID+"-"+it.FileName))
 	return inp, true, nil
 }
 
-// cacheMediaGroupFileIDs persists Telegram file_ids for freshly uploaded items in a group.
-//
-// Telegram may return album messages in an order different from the one we sent,
-// or drop an element entirely. We therefore do NOT rely on positional mapping:
-// each fresh slot is matched to an unused response message by media type first,
-// then to any remaining message. This keeps video file_ids from being silently
-// dropped (which previously caused re-downloads on every storage open).
+// cacheMediaGroupFileIDs associates album replies with their input slots. Reserve
+// cached slots too: matching only new slots by type can assign another photo's ID.
+// Message IDs restore album order if completion callbacks arrive out of order.
 func cacheMediaGroupFileIDs(b *Bot, slots []mediaSlot, sentMsgs []telego.Message) {
-	used := make([]bool, len(sentMsgs))
-	for _, slot := range slots {
+	if len(slots) != len(sentMsgs) {
+		return // An incomplete response cannot be mapped safely.
+	}
+	ordered := slices.Clone(sentMsgs)
+	slices.SortFunc(ordered, func(a, b telego.Message) int {
+		if a.MessageID < b.MessageID {
+			return -1
+		}
+		if a.MessageID > b.MessageID {
+			return 1
+		}
+		return 0
+	})
+	for i, slot := range slots {
 		if !slot.isNew {
 			continue
 		}
-		tgID := bestFileIDForType(slot.item.Type, sentMsgs, used)
+		tgID := exactTypeFileID(slot.item.Type, ordered[i])
 		if tgID == "" {
-			slog.Warn("cacheMediaGroupFileIDs: no file_id found for item",
-				"id", slot.item.ID, "type", slot.item.Type, "sent_count", len(sentMsgs))
+			slog.Warn("cacheMediaGroupFileIDs: unexpected reply type", "id", slot.item.ID)
 			continue
 		}
-		slog.Info("cacheMediaGroupFileIDs: cached file_id", "id", slot.item.ID, "type", slot.item.Type)
 		persistTgFileID(b, slot.item, tgID)
 	}
-}
-
-// bestFileIDForType returns a file_id for the given media type from an unused
-// response message. It prefers an exact type match, then falls back to any media.
-func bestFileIDForType(mt stash.MediaType, msgs []telego.Message, used []bool) string {
-	for j, m := range msgs {
-		if used[j] {
-			continue
-		}
-		if id := exactTypeFileID(mt, m); id != "" {
-			used[j] = true
-			return id
-		}
-	}
-	for j, m := range msgs {
-		if used[j] {
-			continue
-		}
-		if id := anyFileID(m); id != "" {
-			used[j] = true
-			return id
-		}
-	}
-	return ""
 }
 
 // exactTypeFileID returns a file_id only if the message is of the expected type.
@@ -301,53 +265,6 @@ func exactTypeFileID(mt stash.MediaType, m telego.Message) string {
 		}
 	}
 	return ""
-}
-
-// anyFileID returns whichever file_id a message carries, preferring video/document
-// over photo (photos are cheap to re-fetch but we still need something stable).
-func anyFileID(m telego.Message) string {
-	if m.Video != nil {
-		return m.Video.FileID
-	}
-	if m.Animation != nil {
-		return m.Animation.FileID
-	}
-	if m.Document != nil {
-		return m.Document.FileID
-	}
-	if len(m.Photo) > 0 {
-		return m.Photo[len(m.Photo)-1].FileID
-	}
-	return ""
-}
-
-// ── Single item helpers ───────────────────────────────────────────────────────
-
-// sendSingleFromCache sends a GIF or document using its cached Telegram file_id.
-func sendSingleFromCache(b *Bot, chatID int64, it *stash.Item, caption string) int {
-	ctx := context.Background()
-	file := tu.FileFromID(*it.TelegramFileID)
-	sent, err := sendSingleByType(ctx, b, chatID, it.Type, file, caption)
-	if err != nil {
-		slog.Error("sendSingleFromCache: send", "id", it.ID, "error", err)
-		return 0
-	}
-	return sent.MessageID
-}
-
-// uploadSingleItem uploads a GIF or document from raw bytes and caches the returned file_id.
-func uploadSingleItem(b *Bot, chatID int64, it *stash.Item, data []byte, caption string) int {
-	ctx := context.Background()
-	file := tu.FileFromBytes(data, it.FileName)
-	sent, err := sendSingleByType(ctx, b, chatID, it.Type, file, caption)
-	if err != nil {
-		slog.Error("uploadSingleItem: send", "id", it.ID, "error", err)
-		return 0
-	}
-	if tgID := extractSentFileID(it.Type, *sent); tgID != "" {
-		persistTgFileID(b, it, tgID)
-	}
-	return sent.MessageID
 }
 
 // ── Low-level builders ────────────────────────────────────────────────────────
@@ -379,24 +296,6 @@ func buildGroupInput(mediaType stash.MediaType, src telego.InputFile) telego.Inp
 		return tu.MediaVideo(src)
 	}
 	return nil
-}
-
-// sendSingleByType sends a GIF or document and returns the sent message.
-func sendSingleByType(ctx context.Context, b *Bot, chatID int64, mediaType stash.MediaType, file telego.InputFile, caption string) (*telego.Message, error) {
-	switch mediaType {
-	case stash.MediaTypeGIF:
-		params := tu.Animation(tu.ID(chatID), file)
-		if caption != "" {
-			params = params.WithCaption(caption).WithParseMode(telego.ModeHTML)
-		}
-		return b.api.SendAnimation(ctx, params)
-	default:
-		params := tu.Document(tu.ID(chatID), file)
-		if caption != "" {
-			params = params.WithCaption(caption).WithParseMode(telego.ModeHTML)
-		}
-		return b.api.SendDocument(ctx, params)
-	}
 }
 
 // sendFileByType sends any media type and returns (message, file_id, error).
@@ -458,45 +357,6 @@ func sendFileByType(ctx context.Context, b *Bot, chatID int64, mediaType stash.M
 	}
 }
 
-// extractSentFileID extracts the Telegram file_id from a sent message.
-// It prefers the field matching the expected media type, but falls back to any
-// media Telegram actually returned — a video can come back as a document
-// message inside a media group, in which case only .Document is populated.
-func extractSentFileID(mediaType stash.MediaType, sent telego.Message) string {
-	switch mediaType {
-	case stash.MediaTypeImage:
-		if len(sent.Photo) > 0 {
-			return sent.Photo[len(sent.Photo)-1].FileID
-		}
-	case stash.MediaTypeVideo:
-		if sent.Video != nil {
-			return sent.Video.FileID
-		}
-	case stash.MediaTypeGIF:
-		if sent.Animation != nil {
-			return sent.Animation.FileID
-		}
-	default:
-		if sent.Document != nil {
-			return sent.Document.FileID
-		}
-	}
-	// Fallback: grab whichever media field Telegram populated.
-	if sent.Video != nil {
-		return sent.Video.FileID
-	}
-	if sent.Animation != nil {
-		return sent.Animation.FileID
-	}
-	if sent.Document != nil {
-		return sent.Document.FileID
-	}
-	if len(sent.Photo) > 0 {
-		return sent.Photo[len(sent.Photo)-1].FileID
-	}
-	return ""
-}
-
 // persistTgFileID saves the Telegram file_id into the item (for in-session reuse),
 // into the durable Bot cache, and asynchronously persists it to stash so it
 // survives bot restarts and sess.Items being reset.
@@ -507,13 +367,13 @@ func persistTgFileID(b *Bot, item *stash.Item, tgFileID string) {
 		if _, err := b.stash.Update(context.Background(), item.ID, stash.UpdateMeta{TelegramFileID: &tgFileID}); err != nil {
 			slog.Error("persistTgFileID: stash update failed", "id", item.ID, "error", err)
 		} else {
-			slog.Info("persistTgFileID: saved to stash", "id", item.ID, "tg_id", tgFileID)
+			slog.Info("persistTgFileID: saved to stash", "id", item.ID)
 		}
 	}()
 }
 
 // sendByTgFileID sends a file by its Telegram file_id (no re-upload).
-func sendByTgFileID(b *Bot, chatID int64, fileID string, mediaType stash.MediaType, caption string) {
+func sendByTgFileID(b *Bot, chatID int64, fileID string, mediaType stash.MediaType, caption string) (*telego.Message, error) {
 	ctx := context.Background()
 	file := tu.FileFromID(fileID)
 	switch mediaType {
@@ -522,29 +382,21 @@ func sendByTgFileID(b *Bot, chatID int64, fileID string, mediaType stash.MediaTy
 		if caption != "" {
 			params = params.WithCaption(caption)
 		}
-		if _, err := b.api.SendPhoto(ctx, params); err != nil {
-			slog.Error("sendByTgFileID: failed", "tg_id", fileID, "error", err)
-		}
+		return b.api.SendPhoto(ctx, params)
 	case stash.MediaTypeVideo:
 		params := tu.Video(tu.ID(chatID), file)
 		if caption != "" {
 			params = params.WithCaption(caption)
 		}
-		if _, err := b.api.SendVideo(ctx, params); err != nil {
-			slog.Error("sendByTgFileID: failed", "tg_id", fileID, "error", err)
-		}
+		return b.api.SendVideo(ctx, params)
 	case stash.MediaTypeGIF:
-		if _, err := b.api.SendAnimation(ctx, tu.Animation(tu.ID(chatID), file)); err != nil {
-			slog.Error("sendByTgFileID: failed", "tg_id", fileID, "error", err)
-		}
+		return b.api.SendAnimation(ctx, tu.Animation(tu.ID(chatID), file))
 	default:
 		params := tu.Document(tu.ID(chatID), file)
 		if caption != "" {
 			params = params.WithCaption(caption)
 		}
-		if _, err := b.api.SendDocument(ctx, params); err != nil {
-			slog.Error("sendByTgFileID: failed", "tg_id", fileID, "error", err)
-		}
+		return b.api.SendDocument(ctx, params)
 	}
 }
 

@@ -15,6 +15,23 @@ A direct-read `permission denied` followed by HTTP 404 means the shared file is
 inaccessible to the bot; the local API's HTTP fallback cannot serve it. Correct the
 numeric user and deploy through CI. Do not make the API session directories public.
 
+## Sending stored media
+
+Telegram `file_id` values are a cache; Stash's stored object remains the original.
+An explicit HTTP 400 rejecting a cached identifier triggers one retry with bytes
+from Stash and saves the new identifier. This applies to storage albums, single
+photos/videos, GIFs/documents and the File button. An invalid member rejects an
+entire album, so its retry rebuilds every multipart attachment with a distinct
+name. A one-item page uses the corresponding single-media method.
+
+Responses are matched to album slots in message order, including cached slots;
+an incomplete or unexpected response is not guessed across files/media types.
+Timeouts, access/rate-limit errors and server failures do not trigger this recovery,
+because an uncertain send must not produce duplicate messages. The first open
+after cache invalidation can take longer while originals are uploaded; subsequent
+opens reuse the repaired cache. Recovery never replaces/deletes stored objects or
+changes descriptions, tags, embeddings or `file_unique_id`.
+
 ## Структура Compose
 
 Файлы Docker Compose находятся в `compose/`; основной файл — `compose/docker-compose.yml`.
