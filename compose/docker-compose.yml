@@ -7,13 +7,16 @@ services:
         GO_VERSION: ${GO_VERSION:?Run via make}
         ALPINE_VERSION: ${ALPINE_VERSION:?Run via make}
     restart: unless-stopped
+    # Local Bot API creates private directories/files (0700/0600). Run with
+    # its numeric owner, while keeping the shared volume read-only.
+    user: "${TELEGRAM_FILE_UID:-101}:${TELEGRAM_FILE_GID:-101}"
     environment:
       BOT_TOKEN: "${BOT_TOKEN}"
       ROOT_ID: "${ROOT_ID}"
       STASH_URL: "${STASH_URL:-http://stash:8080}"
       OTEL_SERVICE_NAME: "${OTEL_SERVICE_NAME:-stash-bot}"
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4318}"
-      # Temporary public API path while the shared API egress is being rebuilt.
+      # Optional local Bot API endpoint; empty selects Telegram's public API.
       TELEGRAM_LOCAL_API_URL: "${TELEGRAM_LOCAL_API_URL:-}"
       HTTPS_PROXY: "${TELEGRAM_HTTPS_PROXY:-}"
       NO_PROXY: "${NO_PROXY:-stash,telegram-bot-api,jaeger,localhost,127.0.0.1}"

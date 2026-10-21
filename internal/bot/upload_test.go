@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -20,6 +23,37 @@ import (
 )
 
 const testTelegramToken = "123456:" + "abcdefghijklmnopqrstuvwxyz123456789"
+
+func TestReadTelegramFileDoesNotExposePath(t *testing.T) {
+	_, err := readFileLimited(filepath.Join(t.TempDir(), testTelegramToken, "missing.jpg"))
+	if !errors.Is(err, os.ErrNotExist) || strings.Contains(err.Error(), testTelegramToken) {
+		t.Fatalf("expected sanitized filesystem cause, got %v", err)
+	}
+}
+
+func TestDownloadFileFromSharedVolume(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "photo.jpg")
+	if err := os.WriteFile(path, []byte("photo content"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/getFile") {
+			t.Error("shared-volume download attempted an HTTP file fallback")
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"ok":true,"result":{"file_id":"file-id","file_path":%q}}`, path)
+	}))
+	defer server.Close()
+	b, err := New(testTelegramToken, 1, nil, server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := b.downloadFile(t.Context(), "file-id")
+	if err != nil || string(data) != "photo content" {
+		t.Fatalf("shared-volume download = %q, %v", data, err)
+	}
+}
 
 type fileCallerFunc func(context.Context, string, *telegoapi.RequestData) (*telegoapi.Response, error)
 

@@ -230,7 +230,13 @@ func downloadTelegramHTTP(ctx context.Context, rawURL string) (*http.Response, e
 func readFileLimited(path string) ([]byte, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		// Local API paths contain the bot token. Retain the filesystem cause
+		// (e.g. permission denied) without exposing that path in logs.
+		var pathErr *os.PathError
+		if errors.As(err, &pathErr) {
+			return nil, fmt.Errorf("open Telegram file: %w", pathErr.Err)
+		}
+		return nil, fmt.Errorf("open Telegram file failed")
 	}
 	defer file.Close()
 	return readLimited(file)
