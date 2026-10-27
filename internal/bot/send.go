@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/mymmrac/telego"
 	tu "github.com/mymmrac/telego/telegoutil"
@@ -14,7 +15,8 @@ import (
 // Falls back to sending a new message when editing is not possible.
 // Returns the message ID of the resulting message.
 func editOrSendHTML(b *Bot, chatID int64, msgID int, text string, kb *telego.InlineKeyboardMarkup) int {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 	if msgID != 0 {
 		params := tu.EditMessageText(tu.ID(chatID), msgID, text).
 			WithParseMode(telego.ModeHTML).
@@ -29,6 +31,8 @@ func editOrSendHTML(b *Bot, chatID int64, msgID int, text string, kb *telego.Inl
 	}
 	if sent, err := b.api.SendMessage(ctx, params); err == nil {
 		return sent.MessageID
+	} else {
+		slog.Error("send control message", "error", err)
 	}
 	return msgID
 }

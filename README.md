@@ -1,5 +1,12 @@
 # stash-bot
 
+## Start command
+
+`/start` cancels pending input and sends a fresh main menu below the command,
+including when a previous control message is still available. Menu callbacks
+continue to edit the existing controls. Control message requests have a
+15-second deadline; failed sends and start handling are logged.
+
 ## Local Telegram API files
 
 When `TELEGRAM_LOCAL_API_URL` is configured, the bot reads `getFile`'s absolute

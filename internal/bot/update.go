@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"go.opentelemetry.io/otel"
 
@@ -41,6 +42,22 @@ func (b *Bot) handleUpdate(update telego.Update) {
 
 	sess := b.session(msg.From.ID, msg.Chat.ID)
 
+	// Commands must take priority over pending input. A command reply must
+	// appear below /start, rather than silently editing an old control message.
+	cmd, _, _ := tu.ParseCommand(msg.Text)
+	if cmd == "start" {
+		started := time.Now()
+		slog.Info("start command")
+		sess.Pending = ""
+		sess.Screen = ScreenMain
+		sess.LastMsgID = 0
+		showMainMenu(b, msg.Chat.ID, sess)
+		if sess.LastMsgID != 0 {
+			slog.Info("start menu sent", "duration", time.Since(started))
+		}
+		return
+	}
+
 	// If the user armed "find similar by image", route the photo to a
 	// similarity query instead of saving it.
 	if sess.Pending == "simimg" {
@@ -70,13 +87,6 @@ func (b *Bot) handleUpdate(update telego.Update) {
 	case msg.Document != nil:
 		sess.Pending = ""
 		b.handleUpload(ctx, msg, stash.MediaTypeDocument)
-		return
-	}
-
-	cmd, _, _ := tu.ParseCommand(msg.Text)
-	if cmd == "start" {
-		sess.Pending = ""
-		showMainMenu(b, msg.Chat.ID, sess)
 		return
 	}
 
