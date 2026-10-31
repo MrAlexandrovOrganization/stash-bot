@@ -236,7 +236,14 @@ func sendFilesAndAttachKeyboard(b *Bot, chatID int64, sess *Session, pageItems [
 
 	nextStart := (sess.CurrentPage + 1) * pageSize
 	if nextStart < len(sess.Items) {
-		go prefetchItems(b, sess.Items[nextStart:min(nextStart+pageSize, len(sess.Items))])
+		// Snapshot under the user's lock: foreground sends can update cached
+		// Telegram IDs while prefetch is running on the next page.
+		var next []*stash.Item
+		for _, item := range sess.Items[nextStart:min(nextStart+pageSize, len(sess.Items))] {
+			copy := *item
+			next = append(next, &copy)
+		}
+		go prefetchItems(b, next)
 	}
 
 	// Send fresh control message — always appears below the media.

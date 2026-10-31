@@ -1,6 +1,9 @@
 package stash
 
-import "time"
+import (
+	"io"
+	"time"
+)
 
 type MediaType string
 
@@ -17,6 +20,7 @@ type Item struct {
 	FileName           string    `json:"file_name"`
 	ContentType        string    `json:"content_type"`
 	Size               int64     `json:"size"`
+	StoragePath        string    `json:"storage_path"`
 	Description        string    `json:"description"`
 	Tags               []string  `json:"tags"`
 	Source             string    `json:"source"`
@@ -36,13 +40,13 @@ type SearchQuery struct {
 }
 
 // SimilarRequest is the input to a hybrid similarity search against the stash
-// backend. At least one of Text, ItemID or ImageBytes should be set.
+// backend. At least one of Text, ItemID or ImageReader should be set.
 type SimilarRequest struct {
-	Text       string // natural-language query
-	ItemID     string // find items visually similar to this existing item
-	ImageBytes []byte // find items visually similar to an uploaded image
-	Limit      int
-	Offset     int
+	Text        string    // natural-language query
+	ItemID      string    // find items visually similar to this existing item
+	ImageReader io.Reader // find items visually similar to an uploaded image
+	Limit       int
+	Offset      int
 }
 
 type UploadMeta struct {

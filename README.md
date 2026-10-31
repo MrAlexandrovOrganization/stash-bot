@@ -39,6 +39,48 @@ after cache invalidation can take longer while originals are uploaded; subsequen
 opens reuse the repaired cache. Recovery never replaces/deletes stored objects or
 changes descriptions, tags, embeddings or `file_unique_id`.
 
+## Bounded media transfers
+
+Telegram uploads, Stash downloads, outgoing multipart attachments and image-search
+requests use disk-backed temporary files and streaming readers. The copy buffer
+is 32 KiB; media is not accumulated in Go byte slices. A file is limited to
+512 MiB, including when a size is missing or understated. Known oversized messages
+are rejected before `getFile` can download them into the local Bot API. Image
+search has a separate 16 MiB limit.
+
+One shared temporary-file budget is 1 GiB per bot process, including active
+attachments and prefetch. The disk cache uses LRU eviction with a 128 MiB and
+128-entry ceiling; cache keys include the immutable Stash storage path. Evicted
+files remain charged and readable until their final active reader closes. Files
+larger than the cache ceiling are not prefetched. Prefetch skips busy download
+slots instead of queueing behind foreground transfers.
+
+At most two download/upload pipelines and two Telegram media sends run concurrently.
+Albums count as one send and prepare their files through the download limiter.
+Budget exhaustion fails promptly rather than waiting while holding album files;
+an album is not partially sent after a preparation error. Stale Telegram ID
+recovery releases the first attempt's readers before rebuilding the multipart
+request. HTTP errors/timeouts do not trigger extra sends.
+
+Temporary files are mode 0600 and unlinked immediately after creation. They stay
+open through the transfer/cache lease; closing the final reader or terminating
+the process releases the data, including after SIGKILL. The default directory is
+the container's `/tmp` on its writable disk layer. Do not configure it as tmpfs:
+that would charge large files to the same 512 MiB memory budget. Ensure at least
+1 GiB disk headroom for temporary media. No persistent application volumes or
+Telegram API files are changed by this cache.
+
+`make format` applies Go formatting. `make check` validates formatting, runs vet,
+all Go tests with the race detector, Compose validation and `media-memory-test`.
+The latter cross-compiles a test binary for the Docker daemon architecture and
+runs it in a disposable Linux container with 512 MiB RAM, no swap and no external
+network. Synthetic HTTP services exercise a full 512 MiB incoming/outgoing file
+and a ten-file album (16 MiB each) with prefetch, then verify temporary-byte
+cleanup. Ordinary tests also cover LRU eviction, shared concurrent byte admission,
+active-reader lifetime, cancellation, oversized input, bounded transfers and
+cleanup/recovery after failed sends. Tests never send real Telegram messages or
+read production files. `make test` runs the ordinary Go tests without Docker.
+
 ## Структура Compose
 
 Файлы Docker Compose находятся в `compose/`; основной файл — `compose/docker-compose.yml`.

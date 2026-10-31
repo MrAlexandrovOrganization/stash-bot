@@ -44,6 +44,7 @@ func main() {
 		slog.Error("bot init", "error", err)
 		os.Exit(1)
 	}
+	defer b.Close()
 
 	slog.Info("starting")
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

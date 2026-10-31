@@ -68,7 +68,7 @@ func TestNewUsesStandardHTTPProxyTransport(t *testing.T) {
 	if me.Username != "test_bot" {
 		t.Fatalf("GetMe username = %q; want test_bot", me.Username)
 	}
-	data, err := b.downloadFile(ctx, "file-id")
+	data, err := downloadFixture(b, ctx, "file-id")
 	if err != nil || string(data) != "file content" {
 		t.Fatalf("downloadFile() = %q, %v; want file content", data, err)
 	}

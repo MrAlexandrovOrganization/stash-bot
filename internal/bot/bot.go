@@ -19,7 +19,10 @@ type Bot struct {
 	token          string
 	telegramAPIURL string
 	sessions       sync.Map // int64 (userID) → *Session
-	fileCache      sync.Map // string (item ID) → []byte (prefetched raw bytes)
+	mediaOnce      sync.Once
+	media          *mediaStore
+	mediaContext   context.Context
+	stopMedia      context.CancelFunc
 	fileIDCache    sync.Map // string (item ID) → string (Telegram file_id)
 	userLocks      sync.Map // int64 (userID) → *sync.Mutex
 	updateSem      chan struct{}
@@ -57,6 +60,7 @@ func New(token string, rootID int64, stashClient *stash.Client, telegramAPIURL s
 	if err != nil {
 		return nil, fmt.Errorf("telegram file bot: %w", err)
 	}
+	mediaContext, stopMedia := context.WithCancel(context.Background())
 	return &Bot{
 		api:            api,
 		fileAPI:        fileAPI,
@@ -65,10 +69,15 @@ func New(token string, rootID int64, stashClient *stash.Client, telegramAPIURL s
 		token:          token,
 		telegramAPIURL: telegramAPIURL,
 		updateSem:      make(chan struct{}, 8),
+		mediaContext:   mediaContext,
+		stopMedia:      stopMedia,
 	}, nil
 }
 
 func (b *Bot) Run(ctx context.Context) {
+	stop := context.AfterFunc(ctx, b.Close)
+	defer stop()
+	defer b.Close()
 	updates, err := b.api.UpdatesViaLongPolling(ctx, nil)
 	if err != nil {
 		slog.Error("bot: long polling failed", "error", err)
@@ -87,6 +96,21 @@ func (b *Bot) Run(ctx context.Context) {
 			b.handleUpdate(update)
 		}(update)
 	}
+}
+
+func (b *Bot) Close() {
+	if b.stopMedia != nil {
+		b.stopMedia()
+	}
+	b.mediaStore().Close()
+}
+
+func (b *Bot) mediaDeadline() (context.Context, context.CancelFunc) {
+	ctx := b.mediaContext
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithTimeout(ctx, telegramDownloadTimeout)
 }
 
 func (b *Bot) lockUser(userID int64) func() {

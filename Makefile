@@ -37,16 +37,9 @@ restart:
 repair:
 	$(DOCKER_COMPOSE) run --rm --entrypoint /app/repair-media stash-bot
 
-.PHONY: fmt
-fmt:
-	gofmt -w $$(git ls-files '*.go')
-
-.PHONY: fmt-check
-fmt-check:
-	@files="$$(gofmt -l .)"; status=$$?; test $$status -eq 0 || exit $$status; test -z "$$files" || { printf '%s\n' "$$files"; exit 1; }
-
 .PHONY: format
-format: fmt-check
+format:
+	gofmt -w cmd internal
 
 .PHONY: test
 test:
@@ -56,15 +49,17 @@ test:
 vet:
 	go vet ./...
 
-.PHONY: lint
-lint: vet
-
 .PHONY: config-check
 config-check:
 	@BOT_TOKEN=dummy-token ROOT_ID=1 STASH_URL=http://stash:8080 $(DOCKER_COMPOSE) config --quiet
 
 .PHONY: check
-check: fmt-check lint test config-check
+check: vet test-race config-check
+	@files="$$(gofmt -l cmd internal)"; test -z "$$files" || { printf '%s\n' "$$files"; exit 1; }
+
+.PHONY: test-race
+test-race:
+	go test -race ./...
 
 .PHONY: clean
 clean:
@@ -76,6 +71,11 @@ compose-layout-check:
 	$(DOCKER_COMPOSE_BASE) --env-file /dev/null -f compose/docker-compose.yml --profile '*' config --no-interpolate --no-env-resolution --quiet
 
 check: compose-layout-check
+
+.PHONY: media-memory-test
+media-memory-test:
+	python3 scripts/check_media_memory.py
+check: media-memory-test
 
 .PHONY: versions image-build image-publish image-check image-deploy image-activate image-compose
 versions:

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
@@ -52,6 +53,7 @@ func (c *Client) withTimeout(ctx context.Context, d time.Duration) (context.Cont
 
 func (c *Client) Upload(ctx context.Context, r io.Reader, fileName, contentType string, size int64, meta UploadMeta) (*Item, error) {
 	pr, pw := io.Pipe()
+	defer pr.Close()
 	mw := multipart.NewWriter(pw)
 
 	go func() {
@@ -63,7 +65,7 @@ func (c *Client) Upload(ctx context.Context, r io.Reader, fileName, contentType 
 		}
 		partHeader := make(textproto.MIMEHeader)
 		partHeader.Set("Content-Disposition",
-			fmt.Sprintf(`form-data; name="file"; filename="%s"`, fileName))
+			mime.FormatMediaType("form-data", map[string]string{"name": "file", "filename": fileName}))
 		partHeader.Set("Content-Type", ct)
 		fw, err := mw.CreatePart(partHeader)
 		if err != nil {
@@ -136,10 +138,10 @@ func (c *Client) Search(ctx context.Context, q SearchQuery) ([]*Item, error) {
 }
 
 // Similar runs a similarity search against the backend. It uses a multipart
-// POST when ImageBytes is provided (searching for media visually similar to the
+// POST when ImageReader is provided (searching for media visually similar to the
 // uploaded bytes), otherwise a GET with q= and/or item= query parameters.
 func (c *Client) Similar(ctx context.Context, req SimilarRequest) ([]*Item, error) {
-	if len(req.ImageBytes) > 0 {
+	if req.ImageReader != nil {
 		return c.similarByImage(ctx, req)
 	}
 	return c.similarByQuery(ctx, req)
@@ -186,24 +188,27 @@ func (c *Client) similarByQuery(ctx context.Context, req SimilarRequest) ([]*Ite
 }
 
 func (c *Client) similarByImage(ctx context.Context, req SimilarRequest) ([]*Item, error) {
-	var buf bytes.Buffer
-	mw := multipart.NewWriter(&buf)
-	fw, err := mw.CreateFormFile("image", "image.jpg")
-	if err != nil {
-		return nil, err
-	}
-	if _, err := fw.Write(req.ImageBytes); err != nil {
-		return nil, err
-	}
-	if req.Limit > 0 {
-		_ = mw.WriteField("limit", strconv.Itoa(req.Limit))
-	}
-	mw.Close()
+	pr, pw := io.Pipe()
+	defer pr.Close()
+	mw := multipart.NewWriter(pw)
+	go func() {
+		fw, err := mw.CreateFormFile("image", "image.jpg")
+		if err == nil {
+			_, err = io.Copy(fw, req.ImageReader)
+		}
+		if err == nil && req.Limit > 0 {
+			err = mw.WriteField("limit", strconv.Itoa(req.Limit))
+		}
+		if err == nil {
+			err = mw.Close()
+		}
+		pw.CloseWithError(err)
+	}()
 
 	ctx, cancel := c.withTimeout(ctx, c.fileTimeout)
 	defer cancel()
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/similar", &buf)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/similar", pr)
 	if err != nil {
 		return nil, err
 	}

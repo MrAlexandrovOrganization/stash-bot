@@ -25,7 +25,7 @@ import (
 const testTelegramToken = "123456:" + "abcdefghijklmnopqrstuvwxyz123456789"
 
 func TestReadTelegramFileDoesNotExposePath(t *testing.T) {
-	_, err := readFileLimited(filepath.Join(t.TempDir(), testTelegramToken, "missing.jpg"))
+	_, err := openTelegramFile(filepath.Join(t.TempDir(), testTelegramToken, "missing.jpg"))
 	if !errors.Is(err, os.ErrNotExist) || strings.Contains(err.Error(), testTelegramToken) {
 		t.Fatalf("expected sanitized filesystem cause, got %v", err)
 	}
@@ -49,7 +49,7 @@ func TestDownloadFileFromSharedVolume(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := b.downloadFile(t.Context(), "file-id")
+	data, err := downloadFixture(b, t.Context(), "file-id")
 	if err != nil || string(data) != "photo content" {
 		t.Fatalf("shared-volume download = %q, %v", data, err)
 	}
@@ -136,7 +136,7 @@ func TestGetFileInFlightCancellation(t *testing.T) {
 					done <- nil
 					return
 				}
-				_, err := b.downloadFile(ctx, "file-id")
+				_, err := downloadFixture(b, ctx, "file-id")
 				done <- err
 			}()
 			select {
@@ -179,7 +179,7 @@ func TestDownloadFileHTTPFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := b.downloadFile(t.Context(), "file-id")
+	data, err := downloadFixture(b, t.Context(), "file-id")
 	if err != nil || string(data) != "file content" {
 		t.Fatalf("downloadFile() = %q, %v", data, err)
 	}
@@ -242,18 +242,35 @@ func (zeroReader) Read(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func TestReadLimitedAcceptsLimit(t *testing.T) {
-	got, err := readLimitedBytes(io.LimitReader(zeroReader{}, 4), 4)
+func downloadFixture(b *Bot, ctx context.Context, id string) ([]byte, error) {
+	data, err := b.downloadTelegramFile(ctx, id, 0, maxTelegramFileBytes)
 	if err != nil {
-		t.Fatalf("readLimited() error = %v", err)
+		return nil, err
 	}
-	if len(got) != 4 {
-		t.Fatalf("readLimited() returned %d bytes, want 4", len(got))
+	defer data.Close()
+	return io.ReadAll(data)
+}
+
+func TestSpoolAcceptsLimit(t *testing.T) {
+	store := newMediaStore(t.TempDir(), 4, 0)
+	defer store.Close()
+	data, err := store.spool(t.Context(), io.LimitReader(zeroReader{}, 4), -1, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer data.Close()
+	if data.Size() != 4 {
+		t.Fatal("wrong file size")
 	}
 }
 
-func TestReadLimitedRejectsOversizedInput(t *testing.T) {
-	if _, err := readLimitedBytes(io.LimitReader(zeroReader{}, 5), 4); err == nil {
-		t.Fatal("readLimited() accepted oversized input")
+func TestSpoolRejectsOversizedInput(t *testing.T) {
+	store := newMediaStore(t.TempDir(), 8, 0)
+	defer store.Close()
+	if _, err := store.spool(t.Context(), io.LimitReader(zeroReader{}, 5), -1, 4); !errors.Is(err, errMediaTooLarge) {
+		t.Fatalf("oversized input: %v", err)
+	}
+	if store.used != 0 {
+		t.Fatal("failed copy leaked byte budget")
 	}
 }

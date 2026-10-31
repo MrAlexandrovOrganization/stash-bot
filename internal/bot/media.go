@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"slices"
 	"strings"
@@ -68,14 +69,21 @@ type mediaSlot struct {
 // all message IDs in the group. Inputs (and, for uncached items, the downloads
 // from stash) are prepared concurrently; the group is then uploaded in one call.
 func sendMediaGroupItems(b *Bot, chatID int64, items []*stash.Item) []int {
-	return sendMediaGroupItemsAttempt(b, chatID, items, false)
+	ctx, cancel := b.mediaDeadline()
+	defer cancel()
+	release, err := acquireMedia(ctx, b.mediaStore().sends)
+	if err != nil {
+		return nil
+	}
+	defer release()
+	return sendMediaGroupItemsAttempt(ctx, b, chatID, items, false)
 }
 
-func sendMediaGroupItemsAttempt(b *Bot, chatID int64, items []*stash.Item, forceUpload bool) []int {
+func sendMediaGroupItemsAttempt(ctx context.Context, b *Bot, chatID int64, items []*stash.Item, forceUpload bool) []int {
 	// Telegram albums require at least two entries. Search results and the
 	// last storage page can contain only one photo/video.
 	if len(items) == 1 {
-		sent, err := sendItemMessage(b, chatID, items[0], "", forceUpload)
+		sent, err := sendItemMessageInContext(ctx, b, chatID, items[0], "", forceUpload)
 		if err != nil {
 			slog.Error("sendMediaGroupItems: single item", "id", items[0].ID, "error", err)
 			return nil
@@ -85,6 +93,8 @@ func sendMediaGroupItemsAttempt(b *Bot, chatID int64, items []*stash.Item, force
 	type prepared struct {
 		input telego.InputMedia
 		isNew bool
+		lease *mediaLease
+		err   error
 	}
 	preparedList := make([]prepared, len(items))
 
@@ -94,15 +104,27 @@ func sendMediaGroupItemsAttempt(b *Bot, chatID int64, items []*stash.Item, force
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			inp, isNew, err := prepareMediaInput(b, it, forceUpload)
+			inp, isNew, lease, err := prepareMediaInput(ctx, b, it, forceUpload)
 			if err != nil {
 				slog.Error("sendMediaGroupItems: prepare input", "id", it.ID, "error", err)
-				return
 			}
-			preparedList[i] = prepared{input: inp, isNew: isNew}
+			preparedList[i] = prepared{input: inp, isNew: isNew, lease: lease, err: err}
 		}()
 	}
 	wg.Wait()
+	closeFiles := func() {
+		for _, p := range preparedList {
+			if p.lease != nil {
+				p.lease.Close()
+			}
+		}
+	}
+	defer closeFiles()
+	for _, p := range preparedList {
+		if p.err != nil {
+			return nil
+		}
+	}
 
 	// Assemble inputs in original order, preserving the item→slot mapping.
 	var media []telego.InputMedia
@@ -119,16 +141,18 @@ func sendMediaGroupItemsAttempt(b *Bot, chatID int64, items []*stash.Item, force
 		return nil
 	}
 	if len(media) == 1 {
-		return sendMediaGroupItemsAttempt(b, chatID, []*stash.Item{slots[0].item}, forceUpload)
+		closeFiles()
+		return sendMediaGroupItemsAttempt(ctx, b, chatID, []*stash.Item{slots[0].item}, forceUpload)
 	}
 
 	slog.Info("sendMediaGroupItems: sending group", "input_count", len(media))
-	sentMsgs, err := b.api.SendMediaGroup(context.Background(), tu.MediaGroup(tu.ID(chatID), media...))
+	sentMsgs, err := b.api.SendMediaGroup(ctx, tu.MediaGroup(tu.ID(chatID), media...))
 	if err != nil && !forceUpload && invalidTelegramFileID(err) && slices.ContainsFunc(slots, func(s mediaSlot) bool { return !s.isNew }) {
 		// A rejected cached ID rejects the whole album. Rebuild every input:
 		// multipart readers from the first attempt may already be consumed.
 		slog.Warn("sendMediaGroupItems: stale Telegram cache, retrying from Stash")
-		return sendMediaGroupItemsAttempt(b, chatID, items, true)
+		closeFiles()
+		return sendMediaGroupItemsAttempt(ctx, b, chatID, items, true)
 	}
 	if err != nil {
 		slog.Error("sendMediaGroupItems: send", "error", err)
@@ -189,29 +213,21 @@ func sendFile(b *Bot, chatID int64, item *stash.Item) {
 // ── Media group helpers ───────────────────────────────────────────────────────
 
 // prepareMediaInput builds a Telegram media group input for one item.
-// Returns (input, isNew, error) where isNew=true means file_id must be cached after send.
+// isNew means file_id must be cached after send. The caller holds the returned
+// lease through sending and closes it before a retry or return.
 // No caption is set here — the page text is applied to the last message after the group is sent.
-func prepareMediaInput(b *Bot, it *stash.Item, forceUpload bool) (telego.InputMedia, bool, error) {
+func prepareMediaInput(ctx context.Context, b *Bot, it *stash.Item, forceUpload bool) (telego.InputMedia, bool, *mediaLease, error) {
 	if fid, ok := b.lookupFileID(it.ID); ok && !forceUpload {
-		slog.Info("prepareMediaInput: cached (fileIDCache)", "id", it.ID, "type", it.Type)
-		inp := buildGroupInput(it.Type, tu.FileFromID(fid))
-		return inp, false, nil
+		return buildGroupInput(it.Type, tu.FileFromID(fid)), false, nil, nil
 	}
 	if !forceUpload && it.TelegramFileID != nil && *it.TelegramFileID != "" {
-		slog.Info("prepareMediaInput: cached (item)", "id", it.ID, "type", it.Type)
-		inp := buildGroupInput(it.Type, tu.FileFromID(*it.TelegramFileID))
-		return inp, false, nil
+		return buildGroupInput(it.Type, tu.FileFromID(*it.TelegramFileID)), false, nil, nil
 	}
-
-	slog.Info("prepareMediaInput: DOWNLOAD from backend required", "id", it.ID, "type", it.Type)
-	data, err := loadItemData(b, it)
+	data, err := loadItemFile(ctx, b, it)
 	if err != nil {
-		return nil, false, err
+		return nil, false, nil, err
 	}
-	// Different stored items can have the same original filename. Multipart
-	// attachment names must remain distinct within the album.
-	inp := buildGroupInput(it.Type, tu.FileFromBytes(data, it.ID+"-"+it.FileName))
-	return inp, true, nil
+	return buildGroupInput(it.Type, tu.FileFromReader(data, it.ID+"-"+it.FileName)), true, data, nil
 }
 
 // cacheMediaGroupFileIDs associates album replies with their input slots. Reserve
@@ -269,21 +285,31 @@ func exactTypeFileID(mt stash.MediaType, m telego.Message) string {
 
 // ── Low-level builders ────────────────────────────────────────────────────────
 
-// loadItemData returns raw bytes for an item: from the prefetch cache if available,
-// otherwise by downloading from stash.
-func loadItemData(b *Bot, it *stash.Item) ([]byte, error) {
-	if cached, ok := b.fileCache.LoadAndDelete(it.ID); ok {
-		slog.Info("loadItemData: prefetch hit", "id", it.ID)
-		return cached.([]byte), nil
+func mediaCacheKey(it *stash.Item) string { return it.ID + ":" + it.StoragePath }
+
+func loadItemFile(ctx context.Context, b *Bot, it *stash.Item) (*mediaLease, error) {
+	store := b.mediaStore()
+	if it.Size > maxTelegramFileBytes {
+		return nil, errMediaTooLarge
 	}
-	slog.Info("loadItemData: downloading", "id", it.ID, "name", it.FileName)
-	rc, _, err := b.stash.GetFile(context.Background(), it.ID)
+	if hit := store.get(mediaCacheKey(it)); hit != nil {
+		return hit, nil
+	}
+	release, err := acquireMedia(ctx, store.downloads)
 	if err != nil {
 		return nil, err
 	}
-	data, err := readLimited(rc)
-	rc.Close()
-	return data, err
+	defer release()
+	// Another foreground/prefetch operation may have completed while we waited.
+	if hit := store.get(mediaCacheKey(it)); hit != nil {
+		return hit, nil
+	}
+	rc, meta, err := b.stash.GetFile(ctx, it.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	return store.spool(ctx, rc, meta.Size, maxTelegramFileBytes)
 }
 
 // buildGroupInput builds an InputMediaPhoto or InputMediaVideo for use in a media group.
@@ -299,8 +325,8 @@ func buildGroupInput(mediaType stash.MediaType, src telego.InputFile) telego.Inp
 }
 
 // sendFileByType sends any media type and returns (message, file_id, error).
-func sendFileByType(ctx context.Context, b *Bot, chatID int64, mediaType stash.MediaType, fileName string, data []byte, caption string) (*telego.Message, string, error) {
-	file := tu.FileFromBytes(data, fileName)
+func sendFileByType(ctx context.Context, b *Bot, chatID int64, mediaType stash.MediaType, fileName string, data io.Reader, caption string) (*telego.Message, string, error) {
+	file := tu.FileFromReader(data, fileName)
 	switch mediaType {
 	case stash.MediaTypeImage:
 		params := tu.Photo(tu.ID(chatID), file)
@@ -373,8 +399,7 @@ func persistTgFileID(b *Bot, item *stash.Item, tgFileID string) {
 }
 
 // sendByTgFileID sends a file by its Telegram file_id (no re-upload).
-func sendByTgFileID(b *Bot, chatID int64, fileID string, mediaType stash.MediaType, caption string) (*telego.Message, error) {
-	ctx := context.Background()
+func sendByTgFileID(ctx context.Context, b *Bot, chatID int64, fileID string, mediaType stash.MediaType, caption string) (*telego.Message, error) {
 	file := tu.FileFromID(fileID)
 	switch mediaType {
 	case stash.MediaTypeImage:
@@ -400,39 +425,43 @@ func sendByTgFileID(b *Bot, chatID int64, fileID string, mediaType stash.MediaTy
 	}
 }
 
-// prefetchItems downloads stash bytes for items that don't yet have a Telegram file_id,
-// storing them in b.fileCache so the next page send can skip the stash download.
-// Runs in a background goroutine with concurrent downloads.
+// Prefetch is opportunistic: never queue behind a foreground transfer.
+// Only cache-sized files are copied, with the same disk/concurrency budgets.
 func prefetchItems(b *Bot, items []*stash.Item) {
-	var wg sync.WaitGroup
 	for _, it := range items {
-		it := it
 		if it.TelegramFileID != nil && *it.TelegramFileID != "" {
-			continue // already cached in Telegram — no download needed
+			continue
 		}
-		if _, ok := b.fileCache.Load(it.ID); ok {
-			continue // already prefetched
+		store := b.mediaStore()
+		if it.Size > store.cacheMax {
+			continue
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			slog.Info("prefetch: downloading", "id", it.ID)
-			rc, _, err := b.stash.GetFile(context.Background(), it.ID)
+		if hit := store.get(mediaCacheKey(it)); hit != nil {
+			hit.Close()
+			continue
+		}
+		select {
+		case store.downloads <- struct{}{}:
+		default:
+			return
+		}
+		func() {
+			defer func() { <-store.downloads }()
+			ctx, cancel := b.mediaDeadline()
+			defer cancel()
+			rc, meta, err := b.stash.GetFile(ctx, it.ID)
 			if err != nil {
-				slog.Error("prefetch: get file", "id", it.ID, "error", err)
 				return
 			}
-			data, err := readLimited(rc)
-			rc.Close()
+			defer rc.Close()
+			data, err := store.spool(ctx, rc, meta.Size, store.cacheMax)
 			if err != nil {
-				slog.Error("prefetch: read", "id", it.ID, "error", err)
 				return
 			}
-			b.fileCache.Store(it.ID, data)
-			slog.Info("prefetch: cached", "id", it.ID, "bytes", len(data))
+			defer data.Close()
+			store.put(mediaCacheKey(it), data)
 		}()
 	}
-	wg.Wait()
 }
 
 // buildItemCaption returns a short caption for an item (description + tags).

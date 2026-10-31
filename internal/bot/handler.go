@@ -120,6 +120,10 @@ func doSearch(ctx context.Context, b *Bot, chatID int64, sess *Session, query st
 // results (when searching by item) and shows the page.
 func runSimilar(ctx context.Context, b *Bot, chatID int64, sess *Session, req stash.SimilarRequest) {
 	items, err := b.stash.Similar(ctx, req)
+	showSimilarResults(ctx, b, chatID, sess, req, items, err)
+}
+
+func showSimilarResults(ctx context.Context, b *Bot, chatID int64, sess *Session, req stash.SimilarRequest, items []*stash.Item, err error) {
 	if err != nil {
 		slog.Error("similar: stash failed", "error", err)
 		send(b, chatID, "Ошибка похожего поиска.")
