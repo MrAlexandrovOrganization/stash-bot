@@ -61,8 +61,8 @@ func (b *Bot) handleUpdate(update telego.Update) {
 	// If the user armed "find similar by image", route the photo to a
 	// similarity query instead of saving it.
 	if sess.Pending == "simimg" {
-		sess.Pending = ""
 		if msg.Photo != nil {
+			sess.Pending = ""
 			b.handleSimilarByImage(ctx, msg)
 			return
 		}

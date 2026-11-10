@@ -4,10 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"slices"
 	"strconv"
 	"strings"
+	"time"
 
+	"stash-bot/internal/bot/resources"
 	"stash-bot/internal/stash"
 
 	"github.com/mymmrac/telego"
@@ -26,7 +27,10 @@ func showMainMenu(b *Bot, chatID int64, sess *Session) {
 	// so the gallery doesn't linger in the chat. The next storage open re-sends
 	// it (instantly, via the cached Telegram file_id).
 	deleteMediaMessages(b, chatID, sess)
-	text := "👋 Привет! Я твоё личное хранилище медиа.\n\nЧтобы сохранить файл — просто отправь его сюда.\nЧтобы найти — напиши текст или теги."
+	sess.Screen = ScreenMain
+	sess.Pending = ""
+	sess.CurrentItem = nil
+	text := resources.Menu
 	kb := tu.InlineKeyboard(
 		tu.InlineKeyboardRow(
 			tu.InlineKeyboardButton("📦 Хранилище").WithCallbackData("storage"),
@@ -47,51 +51,95 @@ func deleteMediaMessages(b *Bot, chatID int64, sess *Session) {
 	if len(sess.MediaMsgIDs) == 0 {
 		return
 	}
-	slog.Info("deleteMediaMessages", "count", len(sess.MediaMsgIDs))
-	if err := b.api.DeleteMessages(context.Background(), &telego.DeleteMessagesParams{
-		ChatID:     tu.ID(chatID),
-		MessageIDs: sess.MediaMsgIDs,
-	}); err != nil {
-		slog.Error("deleteMediaMessages: failed", "error", err)
-	}
-	sess.MediaMsgIDs = nil
-}
-
-// loadStorageAndShow loads all items from stash (optionally force-reloading) and shows page 0.
-func loadStorageAndShow(ctx context.Context, b *Bot, chatID int64, sess *Session, reload bool) {
-	if reload || sess.Items == nil {
-		slog.Info("loading storage from stash")
-		items, err := b.stash.Search(ctx, stash.SearchQuery{})
-		if err != nil {
-			slog.Error("load storage: stash search failed", "error", err)
-			send(b, chatID, "Ошибка загрузки хранилища.")
-			return
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	remaining := make([]int, 0)
+	for start := 0; start < len(sess.MediaMsgIDs); start += 100 {
+		ids := sess.MediaMsgIDs[start:min(start+100, len(sess.MediaMsgIDs))]
+		err := b.api.DeleteMessages(ctx, &telego.DeleteMessagesParams{ChatID: tu.ID(chatID), MessageIDs: ids})
+		if err == nil {
+			continue
 		}
-		slices.SortFunc(items, func(a, b *stash.Item) int {
-			return b.CreatedAt.Compare(a.CreatedAt)
-		})
-		slog.Info("storage loaded", "count", len(items))
-		sess.Items = items
-		// Seed the durable file_id cache from whatever the backend already has,
-		// so a previously persisted file_id survives sess.Items being reset.
-		for _, it := range items {
-			if it.TelegramFileID != nil && *it.TelegramFileID != "" {
-				b.cacheFileID(it.ID, *it.TelegramFileID)
+		slog.Warn("delete media batch failed", "error", err)
+		for _, id := range ids {
+			err := b.api.DeleteMessage(ctx, &telego.DeleteMessageParams{ChatID: tu.ID(chatID), MessageID: id})
+			if err != nil && !strings.Contains(strings.ToLower(err.Error()), "message to delete not found") {
+				remaining = append(remaining, id)
+				slog.Warn("delete media deferred", "message_id", id, "error", err)
 			}
 		}
-		sess.CurrentPage = 0
-	} else {
-		slog.Info("storage: using cached items", "count", len(sess.Items))
 	}
+	sess.MediaMsgIDs = remaining
+}
+
+func loadStorageAndShow(ctx context.Context, b *Bot, chatID int64, sess *Session) {
+	sess.Browse = BrowseStorage
+	sess.Query = stash.SearchQuery{}
+	sess.CurrentItem = nil
+	sess.Pending = ""
+	loadBrowsePage(ctx, b, chatID, sess, 0)
+}
+
+func browseTotal(sess *Session) int {
+	if sess.Paged {
+		return sess.Total
+	}
+	return len(sess.Items)
+}
+
+func loadBrowsePage(ctx context.Context, b *Bot, chatID int64, sess *Session, page int) {
+	sess.Paged = false
+	deleteMediaMessages(b, chatID, sess)
+	sess.LastMsgID = editOrSendHTML(b, chatID, sess.LastMsgID, resources.Loading, nil)
+	q := sess.Query
+	q.Limit = pageSize
+	q.Offset = page * pageSize
+	result, err := b.stash.SearchPage(ctx, q)
+	if err != nil {
+		slog.Error("load browse page", "error", err)
+		text := resources.SearchError
+		if sess.Browse == BrowseStorage {
+			text = resources.StorageError
+		}
+		clearBrowseResult(b, chatID, sess, text)
+		return
+	}
+	if len(result.Items) == 0 && page > 0 && result.Total > 0 {
+		loadBrowsePage(ctx, b, chatID, sess, 0)
+		return
+	}
+	sess.Items = result.Items
+	sess.Total = result.Total
+	sess.Paged = true
+	sess.CurrentPage = page
 	sess.Screen = ScreenStorage
 	sess.Back = ScreenMain
+	for _, it := range result.Items {
+		if it.TelegramFileID != nil && *it.TelegramFileID != "" {
+			b.cacheFileID(it.ID, *it.TelegramFileID)
+		}
+	}
+	sendStoragePage(b, chatID, sess, true)
+}
 
-	// Reuse already-sent media when returning to the same page without
-	// reloading the item list (e.g. menu → storage). This avoids re-sending
-	// and thus re-downloading media on every open. A reload (new upload, first
-	// open) always re-sends, which also clears any stale media first.
-	reuseMedia := !reload && len(sess.MediaMsgIDs) > 0
-	sendStoragePage(b, chatID, sess, !reuseMedia)
+func resultKeyboard() *telego.InlineKeyboardMarkup {
+	return tu.InlineKeyboard(tu.InlineKeyboardRow(
+		tu.InlineKeyboardButton(resources.RetryButton).WithCallbackData("refresh"),
+		tu.InlineKeyboardButton(resources.StorageButton).WithCallbackData("storage"),
+		tu.InlineKeyboardButton(resources.SearchButton).WithCallbackData("search"),
+		tu.InlineKeyboardButton(resources.MenuButton).WithCallbackData("menu"),
+	))
+}
+
+func clearBrowseResult(b *Bot, chatID int64, sess *Session, text string) {
+	deleteMediaMessages(b, chatID, sess)
+	sess.Items = nil
+	sess.Total = 0
+	sess.CurrentItem = nil
+	sess.CurrentPage = 0
+	sess.Screen = ScreenStorage
+	sess.Back = ScreenMain
+	sess.LastMsgID = editOrSendHTML(b, chatID, sess.LastMsgID, text, resultKeyboard())
 }
 
 // sendStoragePage shows the current page.
@@ -99,20 +147,20 @@ func loadStorageAndShow(ctx context.Context, b *Bot, chatID int64, sess *Session
 // When sendFiles is false (e.g. going back), only the control message is updated in place.
 func sendStoragePage(b *Bot, chatID int64, sess *Session, sendFiles bool) {
 	if len(sess.Items) == 0 {
-		slog.Info("sendStoragePage: empty")
-		kb := tu.InlineKeyboard(
-			tu.InlineKeyboardRow(
-				tu.InlineKeyboardButton("🔍 Поиск").WithCallbackData("search"),
-				tu.InlineKeyboardButton("🏠 Меню").WithCallbackData("menu"),
-			),
-		)
-		sess.LastMsgID = editOrSendHTML(b, chatID, sess.LastMsgID, "📦 Хранилище пусто.", kb)
+		text := resources.EmptyStorage
+		if sess.Browse == BrowseSearch {
+			text = resources.EmptySearch
+		}
+		if sess.Browse == BrowseSimilar {
+			text = resources.EmptySimilar
+		}
+		clearBrowseResult(b, chatID, sess, text)
 		return
 	}
 
 	start, end := currentPageBounds(sess)
 	pageItems := sess.Items[start:end]
-	totalPages := (len(sess.Items) + pageSize - 1) / pageSize
+	totalPages := (browseTotal(sess) + pageSize - 1) / pageSize
 
 	// Diagnostic: report, for each item on the page, where its Telegram file_id
 	// will come from. "DOWNLOAD" means the bot will re-fetch the file from the
@@ -141,8 +189,7 @@ func sendStoragePage(b *Bot, chatID int64, sess *Session, sendFiles bool) {
 
 // showSelectMode replaces the navigation keyboard with numbered item buttons.
 func showSelectMode(b *Bot, chatID int64, sess *Session) {
-	start := sess.CurrentPage * pageSize
-	end := min(start+pageSize, len(sess.Items))
+	start, end := currentPageBounds(sess)
 	pageItems := sess.Items[start:end]
 
 	var rows [][]telego.InlineKeyboardButton
@@ -183,7 +230,10 @@ func showItem(b *Bot, chatID int64, sess *Session) {
 // currentPageBounds returns the [start, end) indices for the current page,
 // resetting to page 0 if start is out of range.
 func currentPageBounds(sess *Session) (start, end int) {
-	start = sess.CurrentPage * pageSize
+	if sess.Paged {
+		return 0, len(sess.Items)
+	}
+	start = max(0, sess.CurrentPage) * pageSize
 	if start >= len(sess.Items) {
 		sess.CurrentPage = 0
 		start = 0
@@ -194,13 +244,18 @@ func currentPageBounds(sess *Session) (start, end int) {
 
 // buildStoragePageText builds the text for a storage page listing.
 func buildStoragePageText(sess *Session, pageItems []*stash.Item, start, totalPages int) string {
-	title := "📦 <b>Хранилище</b>"
-	if sess.Back != ScreenMain {
-		title = "🔍 <b>Результаты поиска</b>"
+	if sess.Paged {
+		start = sess.CurrentPage * pageSize
 	}
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "%s\n", title)
-	fmt.Fprintf(&sb, "Страница %d из %d · %d файлов\n\n", sess.CurrentPage+1, totalPages, len(sess.Items))
+	queryParts := []string{sess.Query.Text}
+	for _, tag := range sess.Query.Tags {
+		queryParts = append(queryParts, "#"+tag)
+	}
+	for _, tag := range sess.Query.ExcludeTags {
+		queryParts = append(queryParts, "-#"+tag)
+	}
+	sb.WriteString(resources.PageHeader(resources.Page{Kind: string(sess.Browse), Query: strings.TrimSpace(strings.Join(queryParts, " ")), Number: sess.CurrentPage + 1, Pages: totalPages, Total: browseTotal(sess)}))
 	for i, it := range pageItems {
 		label := sanitizeUTF8(it.Description)
 		if label == "" {
@@ -209,7 +264,7 @@ func buildStoragePageText(sess *Session, pageItems []*stash.Item, start, totalPa
 		if len([]rune(label)) > 55 {
 			label = string([]rune(label)[:55]) + "…"
 		}
-		fmt.Fprintf(&sb, "%s %d. %s\n", mediaIcon(it.Type), start+i+1, escapeHTML(label))
+		sb.WriteString(resources.PageItem(mediaIcon(it.Type), start+i+1, label))
 	}
 	return sb.String()
 }
@@ -224,18 +279,21 @@ func sendFilesAndAttachKeyboard(b *Bot, chatID int64, sess *Session, pageItems [
 
 	// Delete the control message so it can be re-sent below the media.
 	if sess.LastMsgID != 0 {
-		_ = b.api.DeleteMessage(context.Background(), &telego.DeleteMessageParams{
+		err := b.api.DeleteMessage(context.Background(), &telego.DeleteMessageParams{
 			ChatID:    tu.ID(chatID),
 			MessageID: sess.LastMsgID,
 		})
+		if err != nil {
+			_, _ = b.api.EditMessageReplyMarkup(context.Background(), &telego.EditMessageReplyMarkupParams{ChatID: tu.ID(chatID), MessageID: sess.LastMsgID, ReplyMarkup: tu.InlineKeyboard()})
+		}
 		sess.LastMsgID = 0
 	}
 
 	mediaIDs := sendPageFilesCollectIDs(b, chatID, pageItems)
-	sess.MediaMsgIDs = mediaIDs
+	sess.MediaMsgIDs = append(sess.MediaMsgIDs, mediaIDs...)
 
 	nextStart := (sess.CurrentPage + 1) * pageSize
-	if nextStart < len(sess.Items) {
+	if !sess.Paged && nextStart < len(sess.Items) {
 		// Snapshot under the user's lock: foreground sends can update cached
 		// Telegram IDs while prefetch is running on the next page.
 		var next []*stash.Item

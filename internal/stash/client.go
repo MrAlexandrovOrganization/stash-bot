@@ -106,7 +106,12 @@ func (c *Client) Upload(ctx context.Context, r io.Reader, fileName, contentType 
 	return decodeItem(c.http.Do(req))
 }
 
-func (c *Client) Search(ctx context.Context, q SearchQuery) ([]*Item, error) {
+// StatusError carries a safe HTTP status without returning upstream response data.
+type StatusError struct{ Status int }
+
+func (e *StatusError) Error() string { return fmt.Sprintf("stash status %d", e.Status) }
+
+func searchParams(q SearchQuery) url.Values {
 	params := url.Values{}
 	if q.Text != "" {
 		params.Set("q", q.Text)
@@ -114,6 +119,42 @@ func (c *Client) Search(ctx context.Context, q SearchQuery) ([]*Item, error) {
 	if len(q.Tags) > 0 {
 		params.Set("tags", strings.Join(q.Tags, ","))
 	}
+	if len(q.ExcludeTags) > 0 {
+		params.Set("exclude_tags", strings.Join(q.ExcludeTags, ","))
+	}
+	if q.Limit > 0 {
+		params.Set("limit", strconv.Itoa(q.Limit))
+	}
+	if q.Offset > 0 {
+		params.Set("offset", strconv.Itoa(q.Offset))
+	}
+	return params
+}
+
+func (c *Client) SearchPage(ctx context.Context, q SearchQuery) (*SearchPage, error) {
+	ctx, cancel := c.withTimeout(ctx, c.timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/items/page?"+searchParams(q).Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("search page: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, &StatusError{resp.StatusCode}
+	}
+	var page SearchPage
+	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+		return nil, err
+	}
+	return &page, nil
+}
+
+func (c *Client) Search(ctx context.Context, q SearchQuery) ([]*Item, error) {
+	params := searchParams(q)
 
 	ctx, cancel := c.withTimeout(ctx, c.timeout)
 	defer cancel()
@@ -148,7 +189,7 @@ func (c *Client) Similar(ctx context.Context, req SimilarRequest) ([]*Item, erro
 }
 
 func (c *Client) similarByQuery(ctx context.Context, req SimilarRequest) ([]*Item, error) {
-	params := url.Values{}
+	params := searchParams(SearchQuery{Tags: req.Tags, ExcludeTags: req.ExcludeTags})
 	if req.Text != "" {
 		params.Set("q", req.Text)
 	}
@@ -180,7 +221,7 @@ func (c *Client) similarByQuery(ctx context.Context, req SimilarRequest) ([]*Ite
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("similar: status %d", resp.StatusCode)
+		return nil, &StatusError{resp.StatusCode}
 	}
 
 	var items []*Item
@@ -220,7 +261,7 @@ func (c *Client) similarByImage(ctx context.Context, req SimilarRequest) ([]*Ite
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("similar: status %d", resp.StatusCode)
+		return nil, &StatusError{resp.StatusCode}
 	}
 
 	var items []*Item

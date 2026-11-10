@@ -18,7 +18,7 @@ type Bot struct {
 	rootID         int64
 	token          string
 	telegramAPIURL string
-	sessions       sync.Map // int64 (userID) → *Session
+	sessions       sync.Map // sessionKey → *Session
 	mediaOnce      sync.Once
 	media          *mediaStore
 	mediaContext   context.Context
@@ -120,8 +120,10 @@ func (b *Bot) lockUser(userID int64) func() {
 	return mu.Unlock
 }
 
+type sessionKey struct{ userID, chatID int64 }
+
 func (b *Bot) session(userID, chatID int64) *Session {
-	v, _ := b.sessions.LoadOrStore(userID, &Session{ChatID: chatID, Screen: ScreenMain})
+	v, _ := b.sessions.LoadOrStore(sessionKey{userID, chatID}, &Session{ChatID: chatID, Screen: ScreenMain})
 	sess := v.(*Session)
 	sess.ChatID = chatID
 	return sess

@@ -3,6 +3,7 @@ package bot
 import (
 	"fmt"
 
+	"stash-bot/internal/bot/resources"
 	"stash-bot/internal/stash"
 
 	"github.com/mymmrac/telego"
@@ -22,6 +23,7 @@ func storagePageKeyboard(page, totalPages int) *telego.InlineKeyboardMarkup {
 	}
 
 	actionRow := tu.InlineKeyboardRow(
+		tu.InlineKeyboardButton(resources.StorageButton).WithCallbackData("storage"),
 		tu.InlineKeyboardButton("✅ Выбрать").WithCallbackData("ssel"),
 		tu.InlineKeyboardButton("🔍 Поиск").WithCallbackData("search"),
 		tu.InlineKeyboardButton("🔄").WithCallbackData("refresh"),

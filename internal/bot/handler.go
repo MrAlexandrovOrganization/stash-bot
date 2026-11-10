@@ -2,13 +2,14 @@ package bot
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 
+	"stash-bot/internal/bot/resources"
 	"stash-bot/internal/stash"
 
 	"github.com/mymmrac/telego"
-	tu "github.com/mymmrac/telego/telegoutil"
 )
 
 // ── Text input ────────────────────────────────────────────────────────────────
@@ -58,7 +59,9 @@ func updateCurrentItem(b *Bot, ctx context.Context, chatID int64, sess *Session,
 
 // applyItemUpdate refreshes the item in the session's item list and CurrentItem.
 func applyItemUpdate(sess *Session, updated *stash.Item) {
-	sess.CurrentItem = updated
+	if sess.CurrentItem != nil && sess.CurrentItem.ID == updated.ID {
+		sess.CurrentItem = updated
+	}
 	for i, it := range sess.Items {
 		if it.ID == updated.ID {
 			sess.Items[i] = updated
@@ -72,63 +75,54 @@ func applyItemUpdate(sess *Session, updated *stash.Item) {
 func doSearch(ctx context.Context, b *Bot, chatID int64, sess *Session, query string) {
 	query = strings.TrimSpace(query)
 	if query == "" {
-		send(b, chatID, "Введи текст для поиска.")
 		return
 	}
-
-	text, posTags, negTags := parseSearchQuery(query)
-	slog.Info("search", "text", text, "pos_tags", posTags, "neg_tags", negTags)
-
-	items, err := b.stash.Search(ctx, stash.SearchQuery{Text: text, Tags: posTags})
-	if err != nil {
-		slog.Error("search: stash failed", "error", err)
-		send(b, chatID, "Ошибка поиска.")
-		return
-	}
-	slog.Info("search: got results", "count", len(items))
-
-	if len(negTags) > 0 {
-		filtered := items[:0]
-		for _, it := range items {
-			if !hasAnyTag(it.Tags, negTags) {
-				filtered = append(filtered, it)
-			}
-		}
-		slog.Info("search: after negative filter", "count", len(filtered))
-		items = filtered
-	}
-
-	if len(items) == 0 {
-		kb := tu.InlineKeyboard(
-			tu.InlineKeyboardRow(
-				tu.InlineKeyboardButton("🔍 Поиск ещё раз").WithCallbackData("search"),
-				tu.InlineKeyboardButton("🏠 Меню").WithCallbackData("menu"),
-			),
-		)
-		sendHTML(b, chatID, "Ничего не найдено.", kb)
-		return
-	}
-
-	sess.Screen = ScreenStorage
-	sess.Back = ScreenMain
-	sess.Items = items
+	text, pos, neg := parseSearchQuery(query)
+	sess.Browse = BrowseSearch
+	sess.Query = stash.SearchQuery{Text: text, Tags: pos, ExcludeTags: neg}
+	sess.CurrentItem = nil
 	sess.CurrentPage = 0
-	sendStoragePage(b, chatID, sess, true)
+	sess.Pending = ""
+	loadBrowsePage(ctx, b, chatID, sess, 0)
+	if sess.Paged && sess.Total == 0 && text != "" {
+		sess.LastMsgID = editOrSendHTML(b, chatID, sess.LastMsgID, resources.Loading, nil)
+		items, err := b.stash.Similar(ctx, stash.SimilarRequest{Text: text, Tags: pos, ExcludeTags: neg, Limit: similarLimit})
+		if err != nil {
+			clearBrowseResult(b, chatID, sess, resources.FallbackUnavailable)
+			return
+		}
+		showSimilarResults(ctx, b, chatID, sess, stash.SimilarRequest{Text: text, Tags: pos, ExcludeTags: neg}, items, nil)
+	}
 }
 
 // runSimilar executes a similarity search, drops the current media from the
 // results (when searching by item) and shows the page.
 func runSimilar(ctx context.Context, b *Bot, chatID int64, sess *Session, req stash.SimilarRequest) {
+	deleteMediaMessages(b, chatID, sess)
+	sess.LastMsgID = editOrSendHTML(b, chatID, sess.LastMsgID, resources.Loading, nil)
 	items, err := b.stash.Similar(ctx, req)
 	showSimilarResults(ctx, b, chatID, sess, req, items, err)
 }
 
 func showSimilarResults(ctx context.Context, b *Bot, chatID int64, sess *Session, req stash.SimilarRequest, items []*stash.Item, err error) {
+	sess.SimilarQuery = req
+	sess.SimilarQuery.ImageReader = nil // Uploaded query readers are closed after inference.
+	sess.Browse = BrowseSimilar
+	sess.Paged = false
+	sess.Query = stash.SearchQuery{Text: req.Text, Tags: req.Tags, ExcludeTags: req.ExcludeTags}
+	sess.CurrentItem = nil
+	sess.Pending = ""
 	if err != nil {
-		slog.Error("similar: stash failed", "error", err)
-		send(b, chatID, "Ошибка похожего поиска.")
+		slog.Warn("similar search failed", "error", err)
+		text := resources.SimilarError
+		var status *stash.StatusError
+		if errors.As(err, &status) && status.Status == 409 {
+			text = resources.IndexPending
+		}
+		clearBrowseResult(b, chatID, sess, text)
 		return
 	}
+
 	slog.Info("similar: got results", "count", len(items))
 
 	// When searching by an existing item, exclude the query item itself.
@@ -144,13 +138,7 @@ func showSimilarResults(ctx context.Context, b *Bot, chatID int64, sess *Session
 	}
 
 	if len(items) == 0 {
-		kb := tu.InlineKeyboard(
-			tu.InlineKeyboardRow(
-				tu.InlineKeyboardButton("🔍 Найти ещё").WithCallbackData("search"),
-				tu.InlineKeyboardButton("🏠 Меню").WithCallbackData("menu"),
-			),
-		)
-		sendHTML(b, chatID, "Похожих медиа не найдено.", kb)
+		clearBrowseResult(b, chatID, sess, resources.EmptySimilar)
 		return
 	}
 

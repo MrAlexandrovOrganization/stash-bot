@@ -35,8 +35,16 @@ type Item struct {
 }
 
 type SearchQuery struct {
-	Text string
-	Tags []string
+	Text        string
+	Tags        []string
+	ExcludeTags []string
+	Limit       int
+	Offset      int
+}
+
+type SearchPage struct {
+	Items []*Item `json:"items"`
+	Total int     `json:"total"`
 }
 
 // SimilarRequest is the input to a hybrid similarity search against the stash
@@ -47,6 +55,8 @@ type SimilarRequest struct {
 	ImageReader io.Reader // find items visually similar to an uploaded image
 	Limit       int
 	Offset      int
+	Tags        []string
+	ExcludeTags []string
 }
 
 type UploadMeta struct {

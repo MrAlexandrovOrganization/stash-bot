@@ -75,7 +75,12 @@ func (b *Bot) handleUpload(ctx context.Context, msg *telego.Message, mediaType s
 	sess.CurrentItem = item
 	sess.Screen = ScreenItem
 	sess.Back = ScreenStorage
+	deleteMediaMessages(b, msg.Chat.ID, sess)
 	sess.Items = nil
+	sess.Total = 0
+	sess.Browse = BrowseStorage
+	sess.Query = stash.SearchQuery{}
+	sess.Paged = true
 	showItem(b, msg.Chat.ID, sess)
 }
 

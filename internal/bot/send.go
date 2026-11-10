@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/mymmrac/telego"
@@ -23,7 +24,10 @@ func editOrSendHTML(b *Bot, chatID int64, msgID int, text string, kb *telego.Inl
 			WithReplyMarkup(kb)
 		if msg, err := b.api.EditMessageText(ctx, params); err == nil {
 			return msg.MessageID
+		} else if strings.Contains(strings.ToLower(err.Error()), "message is not modified") {
+			return msgID
 		}
+		_, _ = b.api.EditMessageReplyMarkup(ctx, &telego.EditMessageReplyMarkupParams{ChatID: tu.ID(chatID), MessageID: msgID, ReplyMarkup: tu.InlineKeyboard()})
 	}
 	params := tu.Message(tu.ID(chatID), text).WithParseMode(telego.ModeHTML)
 	if kb != nil {

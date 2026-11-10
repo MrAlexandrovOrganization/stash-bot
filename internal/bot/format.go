@@ -86,7 +86,7 @@ func mediaIcon(t stash.MediaType) string {
 // parseCaption splits a file caption into description and #tags.
 func parseCaption(text string) (description string, tags []string) {
 	var descParts []string
-	for word := range strings.SplitSeq(text, " ") {
+	for _, word := range strings.Fields(text) {
 		if strings.HasPrefix(word, "#") {
 			if tag := strings.TrimPrefix(word, "#"); tag != "" {
 				tags = append(tags, tag)
@@ -101,7 +101,7 @@ func parseCaption(text string) (description string, tags []string) {
 // parseSearchQuery splits a search query into text, positive tags (#tag), and negative tags (-#tag).
 func parseSearchQuery(text string) (description string, posTags, negTags []string) {
 	var descParts []string
-	for word := range strings.SplitSeq(text, " ") {
+	for _, word := range strings.Fields(text) {
 		word = strings.TrimSpace(word)
 		if word == "" {
 			continue
@@ -126,7 +126,7 @@ func parseSearchQuery(text string) (description string, posTags, negTags []strin
 func parseTags(text string) []string {
 	text = strings.ReplaceAll(text, ",", " ")
 	var tags []string
-	for part := range strings.SplitSeq(text, " ") {
+	for _, part := range strings.Fields(text) {
 		if t := strings.TrimSpace(strings.TrimPrefix(part, "#")); t != "" {
 			tags = append(tags, t)
 		}

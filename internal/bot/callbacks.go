@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"stash-bot/internal/bot/resources"
 	"stash-bot/internal/stash"
 
 	"github.com/mymmrac/telego"
@@ -55,20 +56,31 @@ func handleMenu(ctx context.Context, b *Bot, cc CallbackContext) {
 func handleStorage(ctx context.Context, b *Bot, cc CallbackContext) {
 	slog.Info("storage callback", "data", cc.data)
 	cc.session.Pending = ""
-	// Reuse the in-session item list when available (the just-uploaded item
-	// invalidates it via sess.Items = nil), so repeated opens don't refetch
-	// and re-upload everything. Use the explicit "refresh" button to force a reload.
-	loadStorageAndShow(ctx, b, cc.chatID, cc.session, cc.session.Items == nil)
+	// Always reset the query; a search page must never become the library cache.
+	loadStorageAndShow(ctx, b, cc.chatID, cc.session)
 }
 
 func handleRefresh(ctx context.Context, b *Bot, cc CallbackContext) {
-	slog.Info("refresh callback", "data", cc.data)
 	cc.session.Pending = ""
-	loadStorageAndShow(ctx, b, cc.chatID, cc.session, true)
+	if cc.session.Browse == BrowseSimilar {
+		q := cc.session.SimilarQuery
+		if q.Text != "" || q.ItemID != "" {
+			runSimilar(ctx, b, cc.chatID, cc.session, q)
+		} else {
+			sendStoragePage(b, cc.chatID, cc.session, true)
+		}
+		return
+	}
+	if cc.session.Browse == BrowseSearch {
+		loadBrowsePage(ctx, b, cc.chatID, cc.session, 0)
+		return
+	}
+	loadStorageAndShow(ctx, b, cc.chatID, cc.session)
 }
 
 func handleSearch(ctx context.Context, b *Bot, cc CallbackContext) {
 	slog.Info("search callback", "data", cc.data)
+	deleteMediaMessages(b, cc.chatID, cc.session)
 	cc.session.Pending = "search"
 	kb := tu.InlineKeyboard(
 		tu.InlineKeyboardRow(
@@ -77,7 +89,7 @@ func handleSearch(ctx context.Context, b *Bot, cc CallbackContext) {
 		),
 		tu.InlineKeyboardRow(tu.InlineKeyboardButton("Отмена").WithCallbackData("cancel")),
 	)
-	cc.session.LastMsgID = editOrSendHTML(b, cc.chatID, cc.session.LastMsgID, "🔍 Введи поисковый запрос:\n\nФормат: <code>текст #тег -#исключить</code>", kb)
+	cc.session.LastMsgID = editOrSendHTML(b, cc.chatID, cc.session.LastMsgID, resources.SearchPrompt, kb)
 }
 
 func handleStoragePage(ctx context.Context, b *Bot, cc CallbackContext) {
@@ -88,12 +100,18 @@ func handleStoragePage(ctx context.Context, b *Bot, cc CallbackContext) {
 		slog.Error("callback sp: bad page", "payload", cc.data)
 		return
 	}
-	totalPages := (len(cc.session.Items) + pageSize - 1) / pageSize
+	totalPages := (browseTotal(cc.session) + pageSize - 1) / pageSize
 	if page < 0 || page >= totalPages {
 		slog.Warn("callback sp: page out of range", "page", page, "total", totalPages)
 		return
 	}
 	slog.Info("navigate page", "page", page, "total_pages", totalPages)
+	cc.session.Pending = ""
+	cc.session.Screen = ScreenStorage
+	if cc.session.Paged {
+		loadBrowsePage(ctx, b, cc.chatID, cc.session, page)
+		return
+	}
 	cc.session.CurrentPage = page
 	sendStoragePage(b, cc.chatID, cc.session, true)
 }
@@ -112,13 +130,17 @@ func handleSelectItem(ctx context.Context, b *Bot, cc CallbackContext) {
 		slog.Error("callback si: bad index", "payload", cc.data)
 		return
 	}
-	globalIdx := cc.session.CurrentPage*pageSize + idx
+	start, end := currentPageBounds(cc.session)
+	if idx < 0 || idx >= end-start {
+		return
+	}
+	globalIdx := start + idx
 	if globalIdx < 0 || globalIdx >= len(cc.session.Items) {
 		slog.Error("callback si: index out of range", "global_idx", globalIdx, "total", len(cc.session.Items))
 		return
 	}
 	cc.session.CurrentItem = cc.session.Items[globalIdx]
-	cc.session.Back = cc.session.Screen
+	cc.session.Back = ScreenStorage
 	cc.session.Screen = ScreenItem
 	slog.Info("selected item", "id", cc.session.CurrentItem.ID, "name", cc.session.CurrentItem.FileName)
 	showItem(b, cc.chatID, cc.session)
@@ -183,7 +205,7 @@ func pollAIDescription(b *Bot, userID, chatID int64, sess *Session, itemID strin
 		select {
 		case <-ctx.Done():
 			unlock := b.lockUser(userID)
-			if sess.CurrentItem != nil && sess.CurrentItem.ID == itemID {
+			if sess.Screen == ScreenItem && sess.Pending == "" && sess.CurrentItem != nil && sess.CurrentItem.ID == itemID {
 				sess.LastMsgID = editOrSendHTML(b, chatID, sess.LastMsgID,
 					"⚠️ Нейроописание пока не готово. Обнови карточку позже.", itemDetailKeyboard(sess.CurrentItem))
 			}
@@ -200,7 +222,7 @@ func pollAIDescription(b *Bot, userID, chatID int64, sess *Session, itemID strin
 			}
 			unlock := b.lockUser(userID)
 			applyItemUpdate(sess, item)
-			if sess.CurrentItem != nil && sess.CurrentItem.ID == itemID {
+			if sess.Screen == ScreenItem && sess.Pending == "" && sess.CurrentItem != nil && sess.CurrentItem.ID == itemID {
 				showItem(b, chatID, sess)
 			}
 			unlock()
@@ -235,6 +257,11 @@ func handleDelete(ctx context.Context, b *Bot, cc CallbackContext) {
 		return
 	}
 	slog.Info("item deleted", "id", itemID)
+	if cc.session.Paged {
+		cc.session.CurrentItem = nil
+		loadBrowsePage(ctx, b, cc.chatID, cc.session, cc.session.CurrentPage)
+		return
+	}
 	removeFromSession(cc.session, itemID)
 	cc.session.CurrentItem = nil
 	cc.session.Screen = cc.session.Back
@@ -250,7 +277,11 @@ func handleBack(ctx context.Context, b *Bot, cc CallbackContext) {
 	switch cc.session.Back {
 	case ScreenStorage:
 		cc.session.Screen = ScreenStorage
-		sendStoragePage(b, cc.chatID, cc.session, false)
+		if cc.session.Browse == BrowseStorage && len(cc.session.Items) == 0 {
+			loadStorageAndShow(ctx, b, cc.chatID, cc.session)
+			return
+		}
+		sendStoragePage(b, cc.chatID, cc.session, len(cc.session.MediaMsgIDs) == 0)
 	default:
 		showMainMenu(b, cc.chatID, cc.session)
 	}
@@ -258,11 +289,13 @@ func handleBack(ctx context.Context, b *Bot, cc CallbackContext) {
 
 func handleCancel(ctx context.Context, b *Bot, cc CallbackContext) {
 	cc.session.Pending = ""
-	slog.Info("cancel pending input")
-	if cc.session.Screen == ScreenItem && cc.session.CurrentItem != nil {
+	switch cc.session.Screen {
+	case ScreenItem:
 		showItem(b, cc.chatID, cc.session)
-	} else {
-		sendStoragePage(b, cc.chatID, cc.session, false)
+	case ScreenStorage, ScreenSelect:
+		sendStoragePage(b, cc.chatID, cc.session, true)
+	default:
+		showMainMenu(b, cc.chatID, cc.session)
 	}
 }
 
@@ -282,22 +315,23 @@ func handleSimilar(ctx context.Context, b *Bot, cc CallbackContext) {
 // handleSimilarTextPrompt starts a natural-language similarity query input.
 func handleSimilarTextPrompt(ctx context.Context, b *Bot, cc CallbackContext) {
 	slog.Info("callback simq", "data", cc.data)
+	deleteMediaMessages(b, cc.chatID, cc.session)
 	cc.session.Pending = "simq"
 	cc.session.LastMsgID = editOrSendHTML(b, cc.chatID, cc.session.LastMsgID,
-		"🔍 Введи описание для поиска похожих медиа:", cancelKeyboard())
+		resources.SimilarPrompt, cancelKeyboard())
 }
 
 // handleSimilarImagePrompt arms the bot to treat the next uploaded photo as a
 // similarity query instead of saving it.
 func handleSimilarImagePrompt(ctx context.Context, b *Bot, cc CallbackContext) {
 	slog.Info("callback simimg", "data", cc.data)
+	deleteMediaMessages(b, cc.chatID, cc.session)
 	cc.session.Pending = "simimg"
 	cc.session.LastMsgID = editOrSendHTML(b, cc.chatID, cc.session.LastMsgID,
-		"🖼 Отправь картинку, и я найду похожие медиа по ней:", cancelKeyboard())
+		resources.ImagePrompt, cancelKeyboard())
 }
 
 func (b *Bot) handleCallback(ctx context.Context, cb *telego.CallbackQuery) {
-	_ = b.api.AnswerCallbackQuery(ctx, tu.CallbackQuery(cb.ID))
 
 	if cb.From.ID != b.rootID {
 		slog.Warn("callback: unauthorized", "user_id", cb.From.ID)
@@ -319,6 +353,28 @@ func (b *Bot) handleCallback(ctx context.Context, cb *telego.CallbackQuery) {
 	chatID := msg.Chat.ID
 	userID := cb.From.ID
 	sess := b.session(userID, chatID)
+
+	staleAction := false
+	if sess.Pending != "" {
+		switch action {
+		case "cancel", "menu", "storage", "search", "simq", "simimg":
+		default:
+			staleAction = true
+		}
+	}
+	if staleAction || (sess.LastMsgID != 0 && msg.MessageID != sess.LastMsgID) {
+		_ = b.api.AnswerCallbackQuery(ctx, tu.CallbackQuery(cb.ID).WithText(resources.StaleButton))
+		if msg.MessageID != sess.LastMsgID {
+			_, _ = b.api.EditMessageReplyMarkup(ctx, &telego.EditMessageReplyMarkupParams{ChatID: tu.ID(chatID), MessageID: msg.MessageID, ReplyMarkup: tu.InlineKeyboard()})
+		}
+		return
+	}
+	if sess.LastMsgID == 0 && action != "menu" && action != "storage" && action != "search" && action != "simq" && action != "simimg" {
+		showMainMenu(b, chatID, sess)
+		return
+	}
+
+	_ = b.api.AnswerCallbackQuery(ctx, tu.CallbackQuery(cb.ID))
 
 	slog.Info("callback", "action", action, "payload", payload, "screen", sess.Screen)
 

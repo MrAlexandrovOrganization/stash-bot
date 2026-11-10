@@ -2,6 +2,14 @@ package bot
 
 import "stash-bot/internal/stash"
 
+type BrowseKind string
+
+const (
+	BrowseStorage BrowseKind = "storage"
+	BrowseSearch  BrowseKind = "search"
+	BrowseSimilar BrowseKind = "similar"
+)
+
 // Screen identifies the current UI screen.
 type Screen string
 
@@ -19,8 +27,13 @@ type Session struct {
 	Back   Screen // where the Back button goes
 
 	// Items loaded for current browsing context (storage or search results).
-	Items       []*stash.Item
-	CurrentPage int
+	Items        []*stash.Item
+	CurrentPage  int
+	Browse       BrowseKind
+	Query        stash.SearchQuery
+	Paged        bool
+	Total        int
+	SimilarQuery stash.SimilarRequest
 
 	// Item currently being viewed or edited.
 	CurrentItem *stash.Item
