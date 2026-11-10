@@ -355,6 +355,16 @@ func (b *Bot) handleCallback(ctx context.Context, cb *telego.CallbackQuery) {
 	sess := b.session(userID, chatID)
 
 	staleAction := false
+	switch action {
+	case "edit", "aidesc", "file", "del", "sim", "back":
+		staleAction = sess.Screen != ScreenItem || sess.CurrentItem == nil
+	case "si":
+		staleAction = sess.Screen != ScreenSelect
+	case "ssel":
+		staleAction = sess.Screen != ScreenStorage || len(sess.Items) == 0
+	case "sp":
+		staleAction = sess.Screen != ScreenStorage && sess.Screen != ScreenSelect
+	}
 	if sess.Pending != "" {
 		switch action {
 		case "cancel", "menu", "storage", "search", "simq", "simimg":

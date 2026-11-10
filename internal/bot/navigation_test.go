@@ -240,3 +240,17 @@ func TestSessionsAreIsolatedBetweenChats(t *testing.T) {
 		t.Fatal("different chats share navigation state")
 	}
 }
+
+func TestDelayedDeleteFromReusedControlCannotDeleteAfterBack(t *testing.T) {
+	b, f := navigationBot(t)
+	sess := b.session(1, 1)
+	sess.Screen = ScreenStorage
+	sess.LastMsgID = 20
+	sess.CurrentItem = &stash.Item{ID: "previous-card"}
+	b.handleCallback(t.Context(), &telego.CallbackQuery{ID: "fixture", From: telego.User{ID: 1}, Message: &telego.Message{MessageID: 20, Chat: telego.Chat{ID: 1}}, Data: "del"})
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.queries) != 0 {
+		t.Fatal("delayed item callback reached backend after leaving card")
+	}
+}
