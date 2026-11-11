@@ -96,3 +96,5 @@ export IMAGE_ARGS
 image-compose:
 	python3 scripts/images.py compose
 include makefiles/ci-deploy.mk
+
+include makefiles/observability.mk

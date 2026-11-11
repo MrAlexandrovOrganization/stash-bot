@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "service": "stash-bot",
+  "components": [
+    "stash-bot/*"
+  ],
+  "logs": [
+    {
+      "file": "monitoring/alloy/logs.alloy",
+      "phase": "parse",
+      "order": 120
+    }
+  ],
+  "assets": []
+}
